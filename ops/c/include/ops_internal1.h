@@ -60,7 +60,8 @@ class OPS_instance;
 
 #ifndef DOXYGEN_SHOULD_SKIP_THIS
 
-#ifndef __cuda_cuda_h__
+//#if !defined(__cuda_cuda_h__) and !defined(__HIPCC__)
+#ifndef __host__
 #define __host__
 #define __device__
 #endif

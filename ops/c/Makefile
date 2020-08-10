@@ -22,6 +22,7 @@ OPS_INSTALL_PATH = $(subst /ops/c,/ops,$(shell pwd))
 include $(OPS_INSTALL_PATH)/../makefiles/Makefile.common
 include $(OPS_INSTALL_PATH)/../makefiles/Makefile.mpi
 include $(OPS_INSTALL_PATH)/../makefiles/Makefile.cuda
+include $(OPS_INSTALL_PATH)/../makefiles/Makefile.hip
 
 ifdef HDF5_INSTALL_PATH
   HDF5_INC 	  	:= -I$(HDF5_INSTALL_PATH)/include
@@ -56,6 +57,11 @@ endif
 ifdef CUDA_INSTALL_PATH
 	TARGETS += cuda mpi_cuda
 	INC += $(CUDA_INC)
+endif
+
+ifdef HIP_INSTALL_PATH
+	TARGETS += hip mpi_hip
+	INC += $(HIP_INC)
 endif
 
 ifdef OPENCL_INSTALL_PATH
@@ -98,11 +104,17 @@ $(OBJ)/%.o : src/opencl/%.cpp
 $(OBJ)/%_mpi.o : src/externlib/%.cpp
 	$(MPICXX) $(CXXFLAGS) -I$(INC)  $(HDF5_INC) -c $< -o $@ 
 
+$(OBJ)/%_hip_mpi.o : src/mpi/%_hip.cpp
+	$(HIPCC) $(HIPFLAGS) -I$(INC) -I$(MPI_INSTALL_PATH)/include/mpi -c $< -o $@ 
+
 $(OBJ)/%_mpi.o : src/mpi/%.cpp
 	$(MPICXX) $(CXXFLAGS) -I$(INC)  $(HDF5_INC) -c $< -o $@ 
 
 $(OBJ)/%_cuda.o : src/cuda/%.cu
 	$(NVCC) $(NVCCFLAGS) -I$(INC) -c $< -o $@
+
+$(OBJ)/%_hip.o : src/hip/%.cpp
+	$(HIPCC) $(HIPFLAGS) -I$(INC) -c $< -o $@
 
 $(OBJ)/%_mpi.o : src/tridiag/%.cpp
 	$(MPICXX) $(CXXFLAGS) -I$(INC) $(TRID_INC) -c $< -o $@
@@ -115,6 +127,9 @@ $(OBJ)/%_cuda.o : src/tridiag/%.cu
 
 $(OBJ)/%.o : src/cuda/%.cu
 	$(NVCC) $(NVCCFLAGS) -I$(INC) -c $< -o $@
+
+$(OBJ)/%.o : src/hip/%.cpp
+	$(HIPCC) $(HIPFLAGS) -I$(INC) -c $< -o $@
 
 $(OBJ)/%.o : src/mpi/%.cu
 	$(NVCC) $(NVCCFLAGS) -I$(INC) -c $< -o $@
@@ -141,6 +156,13 @@ cuda: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o $(OBJ)
 	$(OBJ)/ops_util.o $(OBJ)/ops_cuda_rt_support.o $(OBJ)/ops_cuda_rt_support_cuda.o \
 	$(OBJ)/ops_cuda_decl.o $(OBJ)/ops_dummy_singlenode.o $(OBJ)/ops_checkpointing_strategy.o
 
+hip: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o $(OBJ)/ops_checkpointing.o \
+  $(OBJ)/ops_util.o $(OBJ)/ops_hip_rt_support.o $(OBJ)/ops_hip_rt_support_kernels.o \
+  $(OBJ)/ops_hip_decl.o $(OBJ)/ops_dummy_singlenode.o $(OBJ)/ops_checkpointing_strategy.o
+	ar -r $(LIB)/libops_hip.a $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o $(OBJ)/ops_checkpointing.o \
+	$(OBJ)/ops_util.o $(OBJ)/ops_hip_rt_support.o $(OBJ)/ops_hip_rt_support_kernels.o \
+	$(OBJ)/ops_hip_decl.o $(OBJ)/ops_dummy_singlenode.o $(OBJ)/ops_checkpointing_strategy.o
+
 mpi: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o $(OBJ)/ops_checkpointing.o \
   $(OBJ)/ops_util.o $(OBJ)/ops_mpi_decl_mpi.o $(OBJ)/ops_mpi_rt_support_mpi.o $(OBJ)/ops_checkpointing_strategy_mpi.o \
   $(OBJ)/ops_mpi_core_mpi.o $(OBJ)/ops_mpi_rt_support_host_mpi.o $(OBJ)/ops_mpi_partition_mpi.o 
@@ -159,6 +181,15 @@ mpi_cuda: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o \
 	$(OBJ)/ops_checkpointing.o $(OBJ)/ops_util.o $(OBJ)/ops_mpi_decl_cuda_mpi.o $(OBJ)/ops_mpi_rt_support_mpi.o \
 	$(OBJ)/ops_mpi_core_mpi.o $(OBJ)/ops_mpi_rt_support_cuda.o $(OBJ)/ops_mpi_partition_mpi.o \
 	$(OBJ)/ops_cuda_rt_support.o $(OBJ)/ops_checkpointing_strategy.o
+
+mpi_hip: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o \
+  $(OBJ)/ops_checkpointing.o $(OBJ)/ops_util.o $(OBJ)/ops_mpi_decl_hip_mpi.o $(OBJ)/ops_mpi_rt_support_mpi.o \
+  $(OBJ)/ops_mpi_core_mpi.o $(OBJ)/ops_mpi_rt_support_hip_mpi.o $(OBJ)/ops_mpi_partition_mpi.o \
+  $(OBJ)/ops_hip_rt_support.o $(OBJ)/ops_checkpointing_strategy.o
+	ar -r $(LIB)/libops_mpi_hip.a $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o \
+	$(OBJ)/ops_checkpointing.o $(OBJ)/ops_util.o $(OBJ)/ops_mpi_decl_hip_mpi.o $(OBJ)/ops_mpi_rt_support_mpi.o \
+	$(OBJ)/ops_mpi_core_mpi.o $(OBJ)/ops_mpi_rt_support_hip_mpi.o $(OBJ)/ops_mpi_partition_mpi.o \
+	$(OBJ)/ops_hip_rt_support.o $(OBJ)/ops_checkpointing_strategy.o
 
 opencl: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o $(OBJ)/ops_checkpointing.o \
   $(OBJ)/ops_util.o $(OBJ)/ops_opencl_rt_support.o $(OBJ)/ops_opencl_rt_support_kernels.o \
