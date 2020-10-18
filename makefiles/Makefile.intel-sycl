@@ -12,4 +12,4 @@ ifdef THREADED
 	THREADING_FLAGS ?= -fopenmp
 endif
 SYCLCXX = clang++
-SYCL_FLAGS = -std=c++11 -fsycl -I$(SYCL_INSTALL_PATH)/include -I$(SYCL_INSTALL_PATH)/include #intel sycl
+SYCL_FLAGS = -std=c++11 -fsycl -I$(SYCL_INSTALL_PATH)/include #intel sycl

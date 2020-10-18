@@ -31,39 +31,32 @@
 */
 
 /** @file
-  * @brief OPS cuda backend implementation
-  * @author Gihan Mudalige
-  * @details Implements the OPS API calls for the cuda backend
+  * @brief OPS sycl specific backend implementation
+  * @author Gabor Daniel Balogh
+  * @details Implements the OPS API calls for the sycl backend
   */
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <cuda_runtime_api.h>
-
-#include <ops_cuda_rt_support.h>
 #include <ops_lib_core.h>
+#include <ops_sycl_rt_support.h>
 #include <ops_exceptions.h>
 
-void _ops_init(OPS_instance *instance, const int argc, const char * const argv[], const int diags) {
+// TODO missing: sycl exit data frees
+//                sycl deep copy kernels
+//                halo copies
+
+void _ops_init(OPS_instance *instance, const int argc, const char *const argv[],
+               const int diags) {
   ops_init_core(instance, argc, argv, diags);
 
-  if ((instance->OPS_block_size_x * 
-       instance->OPS_block_size_y * 
+  if ((instance->OPS_block_size_x * instance->OPS_block_size_y *
        instance->OPS_block_size_z) > 1024) {
-    throw OPSException(OPS_RUNTIME_CONFIGURATION_ERROR, "Error: OPS_block_size_x*OPS_block_size_y*OPS_block_size_z should be less than 1024");
+    throw OPSException(
+        OPS_RUNTIME_CONFIGURATION_ERROR,
+        "Error: OPS_block_size_x*OPS_block_size_y*OPS_block_size_z should be "
+        "less than 1024");
   }
-
-#if CUDART_VERSION < 3020
-#error : "must be compiled using CUDA 3.2 or later"
-#endif
-
-#ifdef CUDA_NO_SM_13_DOUBLE_INTRINSICS
-#warning : " *** no support for double precision arithmetic *** "
-#endif
-
-  cutilDeviceInit(instance, argc, argv);
-
-  cutilSafeCall(instance->ostream(), cudaDeviceSetCacheConfig(cudaFuncCachePreferL1));
+  
+  syclDeviceInit(instance, argc, argv);
 }
 
 void ops_init(const int argc, const char *const argv[], const int diags) {
@@ -72,12 +65,63 @@ void ops_init(const int argc, const char *const argv[], const int diags) {
 
 void _ops_exit(OPS_instance *instance) {
   if (instance->is_initialised == 0) return;
-  ops_cuda_exit(instance); // frees dat_d memory
+  // TODO
+  ops_sycl_exit(instance); // frees dat_d memory
+  delete instance->sycl_instance->queue;
+  delete instance->sycl_instance;
   ops_exit_core(instance); // frees lib core variables
 }
 
 void ops_exit() {
   _ops_exit(OPS_instance::getOPSInstance());
+}
+
+ops_dat ops_decl_dat_char(ops_block block, int size, int *dat_size, int *base,
+                          int *d_m, int *d_p, int *stride, char *data, int type_size,
+                          char const *type, char const *name) {
+
+  /** ----             allocate an empty dat             ---- **/
+
+  ops_dat dat = ops_decl_dat_temp_core(block, size, dat_size, base, d_m, d_p,
+                                       stride, data, type_size, type, name);
+
+  size_t bytes = size * type_size;
+  for (int i = 0; i < block->dims; i++)
+    bytes = bytes * dat->size[i];
+
+  dat->data_d = NULL;
+  dat->mem = bytes;
+
+  if (data != NULL && !block->instance->OPS_realloc) {
+    dat->user_managed = 1; // will be reset to 0 if called from
+                           // ops_decl_dat_hdf5()
+  } else {
+    // Allocate memory immediately
+    dat->data = (char *)ops_malloc(bytes);
+    dat->user_managed = 0;
+    if (data != NULL && block->instance->OPS_realloc) {
+      ops_convert_layout(data, dat->data, block, size, dat->size, dat_size,
+                         type_size, 0);
+    } else {
+      ops_init_zero(dat->data, bytes);
+    }
+  }
+  ops_cpHostToDevice(block->instance, (void **)&(dat->data_d), (void **)&(data),
+                     bytes);
+
+  // Compute offset in bytes to the base index
+  dat->base_offset = 0;
+  size_t cumsize = 1;
+  for (int i = 0; i < block->dims; i++) {
+    dat->base_offset +=
+        (block->instance->OPS_soa ? dat->type_size : dat->elem_size)
+        * cumsize * (-dat->base[i] - dat->d_m[i]);
+    cumsize *= dat->size[i];
+  }
+  
+  dat->locked_hd = 0;
+
+  return dat;
 }
 
 ops_dat ops_dat_copy(ops_dat orig_dat) 
@@ -95,11 +139,13 @@ void ops_dat_deep_copy(ops_dat target, ops_dat source)
    // Copy the metadata.  This will reallocate target->data if necessary
    int realloc = ops_dat_copy_metadata_core(target, source);
    if(realloc) {
-      if(target->data_d != nullptr) {
-         cutilSafeCall(source->block->instance->ostream(), cudaFree(target->data_d) ); 
-         target->data_d = nullptr;
-      }
-      cutilSafeCall(target->block->instance->ostream(), cudaMalloc((void**)&(target->data_d), target->mem));
+     if (target->data_d != nullptr) {
+       delete static_cast<cl::sycl::buffer<char, 1> *>(target->data_d);
+       target->data_d = nullptr;
+     }
+     auto *buffer = new cl::sycl::buffer<char, 1>(target->data_h,
+                                                  cl::sycl::range<1>(size));
+     target->data_d = (void *)buffer;
    }
    // Metadata and buffers are set up
    // Enqueue a lazy copy of data from source to target
@@ -113,9 +159,9 @@ void ops_dat_deep_copy(ops_dat target, ops_dat source)
     range[2*i+1] = 1;
   }
   ops_kernel_descriptor *desc = ops_dat_deep_copy_core(target, source, range);
-  desc->name = "ops_internal_copy_cuda";
+  desc->name = "ops_internal_copy_sycl";
   desc->device = 1;
-  desc->function = ops_internal_copy_cuda;
+  desc->function = ops_internal_copy_sycl;
   ops_enqueue_kernel(desc);
 }
 
@@ -147,10 +193,10 @@ void ops_dat_fetch_data_slab_memspace(ops_dat dat, int part, char *data, int *ra
       prod *= target->size[d];
     }
     ops_kernel_descriptor *desc = ops_dat_deep_copy_core(target, dat, range);
-    desc->name = "ops_internal_copy_cuda";
+    desc->name = "ops_internal_copy_sycl";
     desc->device = 1;
-    desc->function = ops_internal_copy_cuda;
-    ops_internal_copy_cuda(desc);
+    desc->function = ops_internal_copy_sycl;
+    ops_internal_copy_sycl(desc);
     target->data_d = NULL;
     ops_free(target);
     ops_free(desc->args);
@@ -187,17 +233,16 @@ void ops_dat_set_data_slab_memspace(ops_dat dat, int part, char *data, int *rang
       prod *= target->size[d];
     }
     ops_kernel_descriptor *desc = ops_dat_deep_copy_core(target, dat, range);
-    desc->name = "ops_internal_copy_cuda_reverse";
+    desc->name = "ops_internal_copy_sycl_reverse";
     desc->device = 1;
-    desc->function = ops_internal_copy_cuda;
-    ops_internal_copy_cuda(desc);
+    desc->function = ops_internal_copy_sycl;
+    ops_internal_copy_sycl(desc);
     target->data_d = NULL;
     ops_free(target);
     ops_free(desc->args);
     ops_free(desc);
     dat->dirty_hd = 2;
   }
-
 }
 
 
@@ -226,10 +271,10 @@ void ops_dat_fetch_data_memspace(ops_dat dat, int part, char *data, ops_memspace
     target->base_offset = 0;
     for (int d = 0; d < OPS_MAX_DIM; d++) target->size[d] = size[d];
     ops_kernel_descriptor *desc = ops_dat_deep_copy_core(target, dat, range);
-    desc->name = "ops_internal_copy_cuda";
+    desc->name = "ops_internal_copy_sycl";
     desc->device = 1;
-    desc->function = ops_internal_copy_cuda;
-    ops_internal_copy_cuda(desc);
+    desc->function = ops_internal_copy_sycl;
+    ops_internal_copy_sycl(desc);
     target->data_d = NULL;
     ops_free(target);
     ops_free(desc->args);
@@ -262,73 +307,14 @@ void ops_dat_set_data_memspace(ops_dat dat, int part, char *data, ops_memspace m
     ops_kernel_descriptor *desc = ops_dat_deep_copy_core(target, dat, range);
     desc->name = "ops_internal_copy_cuda_reverse";
     desc->device = 1;
-    desc->function = ops_internal_copy_cuda;
-    ops_internal_copy_cuda(desc);
+    desc->function = ops_internal_copy_sycl;
+    ops_internal_copy_sycl(desc);
     target->data_d = NULL;
     ops_free(target);
     ops_free(desc->args);
     ops_free(desc);
     dat->dirty_hd = 2;
   } 
-}
-
-
-ops_dat ops_decl_dat_char(ops_block block, int size, int *dat_size, int *base,
-                          int *d_m, int *d_p, int *stride, char *data, int type_size,
-                          char const *type, char const *name) {
-
-  /** ----             allocate an empty dat             ---- **/
-
-  ops_dat dat = ops_decl_dat_temp_core(block, size, dat_size, base, d_m, d_p,
-                                       stride, data, type_size, type, name);
-
-  size_t bytes = size * type_size;
-  for (int i = 0; i < block->dims; i++)
-    bytes = bytes * dat->size[i];
-
-  if (data != NULL && !block->instance->OPS_realloc) {
-    // printf("Data read in from HDF5 file or is allocated by the user\n");
-    dat->user_managed =
-        1; // will be reset to 0 if called from ops_decl_dat_hdf5()
-    dat->is_hdf5 = 0;
-    dat->mem = bytes;
-    dat->hdf5_file = "none"; // will be set to an hdf5 file if called from
-    ops_cpHostToDevice ( block->instance, ( void ** ) &( dat->data_d ),
-            ( void ** ) &( dat->data ), bytes );
-                             // ops_decl_dat_hdf5()
-  } else {
-    // Allocate memory immediately
-    dat->data = (char*) ops_malloc(bytes);
-    dat->user_managed = 0;
-    dat->mem = bytes;
-    dat->data_d = NULL;
-    if (data != NULL && block->instance->OPS_realloc) {
-      ops_convert_layout(data, dat->data, block, size,
-          dat->size, dat_size, type_size, 0);
-//          dat->size, dat_size_orig, type_size, 0);
-//          block->instance->OPS_hybrid_layout ? //TODO: comes in when batching
-//          block->instance->ops_batch_size : 0);
-    } else
-      ops_init_zero(dat->data, bytes);
-
-    ops_cpHostToDevice ( block->instance, ( void ** ) &( dat->data_d ),
-            ( void ** ) &(data), bytes );
-  }
-
-  // Compute offset in bytes to the base index
-  dat->base_offset = 0;
-  size_t cumsize = 1;
-  for (int i = 0; i < block->dims; i++) {
-    dat->base_offset +=
-        (block->instance->OPS_soa ? dat->type_size : dat->elem_size)
-        * cumsize * (-dat->base[i] - dat->d_m[i]);
-    cumsize *= dat->size[i];
-  }
-
-
-  dat->x_pad = 0; // no padding for data alignment
-
-  return dat;
 }
 
 void ops_reduction_result_char(ops_reduction handle, int type_size, char *ptr) {
@@ -376,14 +362,14 @@ ops_arg ops_arg_gbl_char(char *data, int dim, int size, ops_access acc) {
 void ops_print_dat_to_txtfile(ops_dat dat, const char *file_name) {
   // printf("file %s, name %s type = %s\n",file_name, dat->name, dat->type);
   // need to get data from GPU
-  ops_cuda_get_data(dat);
+  ops_sycl_get_data(dat);
   ops_print_dat_to_txtfile_core(dat, file_name);
 }
 
 void ops_NaNcheck(ops_dat dat) {
   char buffer[1]={'\0'};
   // need to get data from GPU
-  ops_cuda_get_data(dat);
+  ops_sycl_get_data(dat);
   ops_NaNcheck_core(dat, buffer);
 }
 
@@ -397,16 +383,14 @@ void ops_partition(const char *routine) {
 }
 
 void ops_timers(double *cpu, double *et) {
-  // cutilSafeCall ( cudaDeviceSynchronize ( ) );
   ops_timers_core(cpu, et);
 }
 
 // routine to fetch data from device
-void ops_get_data(ops_dat dat) { ops_cuda_get_data(dat); }
-void ops_put_data(ops_dat dat) { ops_cuda_put_data(dat); }
+void ops_get_data(ops_dat dat) { ops_sycl_get_data(dat); }
+void ops_put_data(ops_dat dat) { ops_sycl_put_data(dat); }
 
 void ops_halo_transfer(ops_halo_group group) {
-  // printf("In CUDA block halo transfer\n");
 
   for (int h = 0; h < group->nhalos; h++) {
     ops_halo halo = group->halos[h];
@@ -414,10 +398,9 @@ void ops_halo_transfer(ops_halo_group group) {
     for (int i = 1; i < halo->from->block->dims; i++)
       size *= halo->iter_size[i];
     if (size > group->instance->ops_halo_buffer_size) {
-      cutilSafeCall(group->instance->ostream(), cudaFree(group->instance->ops_halo_buffer_d));
-      cutilSafeCall(group->instance->ostream(),cudaMalloc((void **)&group->instance->ops_halo_buffer_d, size));
+      delete static_cast<cl::sycl::buffer<char, 1> *>(group->instance->ops_halo_buffer_d);
+      group->instance->ops_halo_buffer_d = (char *) new cl::sycl::buffer<char, 1>(cl::sycl::range<1>(size));
       group->instance->ops_halo_buffer_size = size;
-      //cutilSafeCall(cudaDeviceSynchronize());
     }
 
     // copy to linear buffer from source
@@ -467,7 +450,6 @@ void ops_halo_transfer(ops_halo_group group) {
                         step[1], step[2], buf_strides[0], buf_strides[1],
                         buf_strides[2]);
 
-    //cutilSafeCall(cudaDeviceSynchronize());
 
     // copy from linear buffer to target
     for (int i = 0; i < OPS_MAX_DIM; i++) {
@@ -517,7 +499,6 @@ void ops_halo_transfer(ops_halo_group group) {
     halo->to->dirty_hd = 2;
   }
 }
-
 /************* Functions only use in the Fortran Backend ************/
 
 extern "C" int getOPS_block_size_x() { return OPS_instance::getOPSInstance()->OPS_block_size_x; }

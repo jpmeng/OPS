@@ -31,134 +31,122 @@
 */
 
 /** @file
-  * @brief OPS cuda specific runtime support functions
-  * @author Gihan Mudalige
-  * @details Implements cuda backend runtime support functions
+  * @brief OPS sycl specific runtime support functions
+  * @author Gabor Daniel Balogh
+  * @details Implements sycl backend runtime support functions
   */
 
 //
 // header files
 //
 
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <cuda.h>
-#include <cuda_runtime_api.h>
-#include <math_constants.h>
-
-#include <ops_cuda_rt_support.h>
+#include <ops_sycl_rt_support.h>
 #include <ops_lib_core.h>
 #include <ops_exceptions.h>
 
-// Small re-declaration to avoid using struct in the C version.
-// This is due to the different way in which C and C++ see structs
-
-typedef struct cudaDeviceProp cudaDeviceProp_t;
 
 //
-// CUDA utility functions
+// SYCL utility functions
 //
 
-void __cudaSafeCall(std::ostream &stream, cudaError_t err, const char *file, const int line) {
-  if (cudaSuccess != err) {
-    fprintf2(stream, "%s(%i) : cutilSafeCall() Runtime API error : %s.\n", file,
-            line, cudaGetErrorString(err));
-    if (err == cudaErrorNoKernelImageForDevice) 
-    throw OPSException(OPS_RUNTIME_ERROR, "Please make sure the OPS CUDA/MPI+CUDA backends were compiled for your GPU");
-    else throw OPSException(OPS_RUNTIME_ERROR, cudaGetErrorString(err));
-  }
-}
-
-void cutilDeviceInit(OPS_instance *instance, const int argc, const char * const argv[]) {
-  (void)argc;
-  (void)argv;
-  int deviceCount;
-  cutilSafeCall(instance->ostream(), cudaGetDeviceCount(&deviceCount));
-  if (deviceCount == 0) {
-    throw OPSException(OPS_RUNTIME_CONFIGURATION_ERROR, "Error: no available CUDA devices");
-  }
-
-  // Test we have access to a device
-
-  float *test = 0;
-  int my_id = ops_get_proc();
-  instance->OPS_hybrid_gpu = 0;
-  for (int i = 0; i < deviceCount; i++) {
-    cudaError_t err = cudaSetDevice((i+my_id)%deviceCount);
-    if (err == cudaSuccess) {
-      cudaError_t err2 = cudaMalloc((void **)&test, sizeof(float));
-      if (err2 == cudaSuccess) {
-        instance->OPS_hybrid_gpu = 1;
-        break;
-      }
+void syclDeviceInit(OPS_instance *instance, const int argc,
+                    const char *const argv[]) {
+  int OPS_sycl_device = 3;
+  for (int i = 0; i < argc; ++i) {
+    if (strncmp(argv[i], "OPS_SYCL_DEVICE=", 16) == 0) {
+      if (strcmp(argv[i] + strlen("SYCL_DEVICE="), "host") == 0)
+        OPS_sycl_device = 0;
+      else if (strcmp(argv[i] + strlen("SYCL_DEVICE="), "cpu") == 0)
+        OPS_sycl_device = 1;
+      else if (strcmp(argv[i] + strlen("SYCL_DEVICE="), "gpu") == 0)
+        OPS_sycl_device = 2;
+      break;
     }
   }
-  if (instance->OPS_hybrid_gpu) {
-    cudaFree(test);
-
-    int deviceId = -1;
-    cudaGetDevice(&deviceId);
-    cudaDeviceProp_t deviceProp;
-    cutilSafeCall(instance->ostream(), cudaGetDeviceProperties(&deviceProp, deviceId));
-    if (instance->OPS_diags>2) instance->ostream() << "\n Using CUDA device: " <<
-      deviceId << " " << deviceProp.name;
-  } else {
-    throw OPSException(OPS_RUNTIME_CONFIGURATION_ERROR, "Error: no available CUDA devices");
+  instance->sycl_instance = new OPS_instance_sycl();
+  switch (OPS_sycl_device) {
+  case 0:
+    instance->sycl_instance->queue =
+        new cl::sycl::queue(cl::sycl::host_selector());
+    break;
+  case 1:
+    instance->sycl_instance->queue =
+        new cl::sycl::queue(cl::sycl::cpu_selector());
+    break;
+  case 2:
+    instance->sycl_instance->queue =
+        new cl::sycl::queue(cl::sycl::gpu_selector());
+    break;
+  case 3:
+    instance->sycl_instance->queue =
+        new cl::sycl::queue(cl::sycl::default_selector());
+    break;
+  default: ops_printf("Error, unrecognised SYCL device selection\n"); exit(-1);
   }
+
+  instance->OPS_hybrid_gpu = 1;
 }
 
-void ops_cpHostToDevice(OPS_instance *instance, void **data_d, void **data_h, size_t size) {
+void ops_sycl_memcpyHostToDevice(OPS_instance *instance,
+                                 cl::sycl::buffer<char, 1> *data_d,
+                                 char *data_h, size_t bytes) {
+  // create sub buffer
+  cl::sycl::buffer<char, 1> buffer(*data_d, cl::sycl::id<1>(0), cl:sycl:range<1>(bytes);
+#ifdef SYCL_COPY
+  instance->sycl_instance->queue->submit([&](cl::sycl::handler &cgh) {
+    auto acc = buffer.template get_access<cl::sycl::access::mode::write>(cgh);
+    cgh.copy(data_h, acc);
+  });
+  instance->sycl_instance->queue->wait();
+#else
+  auto HostAccessor = buffer.get_access<cl::sycl::access::mode::write>();
+  for (size_t i = 0; i < bytes; i++)
+    HostAccessor[i] = data_h[i];
+#endif
+}
 
-  if ( *data_d == NULL ) {
-      cutilSafeCall(instance->ostream(), cudaMalloc(data_d, size));
+void ops_sycl_memcpyDeviceToHost(OPS_instance *instance,
+                                 cl::sycl::buffer<char, 1> *data_d,
+                                 char *data_h, size_t bytes) {
+  // create sub buffer
+  cl::sycl::buffer<char, 1> buffer(*data_d, cl::sycl::id<1>(0), cl:sycl:range<1>(bytes);
+#ifdef SYCL_COPY
+  instance->sycl_instance->queue->submit([&](cl::sycl::handler &cgh) {
+    auto acc = buffer.template get_access<cl::sycl::access::mode::read>(cgh);
+    cgh.copy(acc, data_h);
+  });
+  instance->sycl_instance->queue->wait();
+#else
+  auto HostAccessor = buffer.get_access<cl::sycl::access::mode::read>();
+  for (size_t i = 0; i < bytes; i++)
+    data_h[i] = HostAccessor[i];
+#endif
+}
+
+void ops_cpHostToDevice(OPS_instance *instance, void **data_d, void **data_h,
+                        size_t size) {
+  if (!instance->OPS_hybrid_gpu) return;
+  if (*data_d != nullptr) {
+    delete static_cast<cl::sycl::buffer<char, 1> *>(*data_d);
   }
-
-  if (data_h == NULL || *data_h == NULL) {
-    cutilSafeCall(instance->ostream(), cudaMemset(*data_d, 0, size));
-    return;
-  }
-
-  /*static void* stage = NULL;
-  static size_t stage_size = 0;
-
-  void *src = NULL;
-  if ( size < 4*1024*1024 ) {
-      if ( (size_t)size > stage_size ) {
-          if ( stage ) cudaFreeHost(stage);
-          stage_size = size;
-          cutilSafeCall(instance->ostream(), cudaMallocHost(&stage, stage_size));
-      }
-
-      memcpy(stage, *data_h, size);
-      src = stage;
-  } else {
-      src = *data_h;
-  }*/
-
-  cutilSafeCall(instance->ostream(), cudaMemcpy(*data_d, *data_h, size, cudaMemcpyHostToDevice));
+  auto *buffer = new cl::sycl::buffer<char, 1>(cl::sycl::range<1>(size));
+  *data_d = (void *)buffer;
+  char *data = (char *)(*data_h);
+  ops_sycl_memcpyHostToDevice(instance, buffer, data, size);
 }
 
 void ops_download_dat(ops_dat dat) {
-
-  size_t bytes = dat->elem_size;
-  for (int i = 0; i < dat->block->dims; i++)
-    bytes = bytes * dat->size[i];
-  // printf("downloading to host from device %d bytes\n",bytes);
-  cutilSafeCall(dat->block->instance->ostream(), 
-      cudaMemcpy(dat->data, dat->data_d, bytes, cudaMemcpyDeviceToHost));
+  ops_sycl_memcpyHostToDevice(
+      dat->blcok->instance,
+      static_cast<cl::sycl::buffer<char, 1> *>(dat->data_d), dat->data,
+      dat->mem);
 }
 
 void ops_upload_dat(ops_dat dat) {
-
-  size_t bytes = dat->elem_size;
-  for (int i = 0; i < dat->block->dims; i++)
-    bytes = bytes * dat->size[i];
-  // printf("uploading to device from host %d bytes\n",bytes);
-  cutilSafeCall(dat->block->instance->ostream(), 
-      cudaMemcpy(dat->data_d, dat->data, bytes, cudaMemcpyHostToDevice));
+  ops_sycl_memcpyHostToDevice(
+      dat->blcok->instance,
+      static_cast<cl::sycl::buffer<char, 1> *>(dat->data_d), dat->data,
+      dat->mem);
 }
 
 void ops_H_D_exchanges_host(ops_arg *args, int nargs) {
@@ -211,17 +199,13 @@ void ops_set_dirtybit_device_dat(ops_dat dat) {
 // routine to fetch data from GPU to CPU (with transposing SoA to AoS if needed)
 //
 
-void ops_cuda_get_data(ops_dat dat) {
+void ops_sycl_get_data(ops_dat dat) {
   if (dat->dirty_hd == 2)
     dat->dirty_hd = 0;
   else
     return;
-  size_t bytes = dat->elem_size;
-  for (int i = 0; i < dat->block->dims; i++)
-    bytes = bytes * dat->size[i];
-  cutilSafeCall(dat->block->instance->ostream(), 
-      cudaMemcpy(dat->data, dat->data_d, bytes, cudaMemcpyDeviceToHost));
-  cutilSafeCall(dat->block->instance->ostream(), cudaDeviceSynchronize());
+  ops_download_dat(dat);
+  dat->block->instance->sycl_instance->queue->wait();
 }
 
 //
@@ -233,12 +217,8 @@ void ops_cuda_put_data(ops_dat dat) {
     dat->dirty_hd = 0;
   else
     return;
-  size_t bytes = dat->elem_size;
-  for (int i = 0; i < dat->block->dims; i++)
-    bytes = bytes * dat->size[i];
-  cutilSafeCall(dat->block->instance->ostream(), 
-      cudaMemcpy(dat->data_d, dat->data, bytes, cudaMemcpyHostToDevice));
-  cutilSafeCall(dat->block->instance->ostream(), cudaDeviceSynchronize());
+  ops_upload_dat(dat);
+  dat->block->instance->sycl_instance->queue->wait();
 }
 
 
@@ -250,13 +230,15 @@ void reallocConstArrays(OPS_instance *instance, int consts_bytes) {
   if (consts_bytes > instance->OPS_consts_bytes) {
     if (instance->OPS_consts_bytes > 0) {
       ops_free(instance->OPS_consts_h);
-      cudaFreeHost(instance->OPS_gbl_prev);
-      cutilSafeCall(instance->ostream(), cudaFree(instance->OPS_consts_d));
+      ops_free(instance->OPS_gbl_prev);
+      delete static_cast<cl::sycl::buffer<char, 1> *>(instance->OPS_consts_d);
     }
-    instance->OPS_consts_bytes = 4 * consts_bytes; // 4 is arbitrary, more than needed
-    cudaMallocHost((void **)&instance->OPS_gbl_prev, instance->OPS_consts_bytes);
+    instance->OPS_consts_bytes =
+        4 * consts_bytes; // 4 is arbitrary, more than needed
+    instance->OPS_gbl_prev = (char *)ops_malloc(instance->OPS_consts_bytes);
     instance->OPS_consts_h = (char *)ops_malloc(instance->OPS_consts_bytes);
-    cutilSafeCall(instance->ostream(), cudaMalloc((void **)&instance->OPS_consts_d, instance->OPS_consts_bytes));
+    instance->OPS_consts_d = (char *)new cl::sycl::buffer<char, 1>(
+        cl::sycl::range<1>(instance->OPS_consts_bytes));
   }
 }
 
@@ -264,11 +246,13 @@ void reallocReductArrays(OPS_instance *instance, int reduct_bytes) {
   if (reduct_bytes > instance->OPS_reduct_bytes) {
     if (instance->OPS_reduct_bytes > 0) {
       ops_free(instance->OPS_reduct_h);
-      cutilSafeCall(instance->ostream(), cudaFree(instance->OPS_reduct_d));
+      delete static_cast<cl::sycl::buffer<char, 1> *>(instance->OPS_reduct_d);
     }
-    instance->OPS_reduct_bytes = 4 * reduct_bytes; // 4 is arbitrary, more than needed
+    instance->OPS_reduct_bytes =
+        4 * reduct_bytes; // 4 is arbitrary, more than needed
     instance->OPS_reduct_h = (char *)ops_malloc(instance->OPS_reduct_bytes);
-    cutilSafeCall(instance->ostream(), cudaMalloc((void **)&instance->OPS_reduct_d, instance->OPS_reduct_bytes));
+    instance->OPS_reduct_d = (char *)new cl::sycl::buffer<char, 1>(
+        cl::sycl::range<1>(instance->OPS_reduct_bytes));
   }
 }
 
@@ -283,37 +267,39 @@ void mvConstArraysToDevice(OPS_instance *instance, int consts_bytes) {
       instance->OPS_gbl_changed = 1;
   }
   if (instance->OPS_gbl_changed) {
-    // memcpy(instance->OPS_gbl_prev,instance->OPS_consts_h,consts_bytes);
-    // cutilSafeCall ( cudaMemcpyAsync ( instance->OPS_consts_d, instance->OPS_gbl_prev,
-    // consts_bytes,
-    //                             cudaMemcpyHostToDevice ) );
-    cutilSafeCall(instance->ostream(), cudaMemcpy(instance->OPS_consts_d, instance->OPS_consts_h, consts_bytes,
-                             cudaMemcpyHostToDevice));
+    ops_sycl_memcpyHostToDevice(
+        instance,
+        static_cast<cl::sycl::buffer<char, 1> *>(instance->OPS_consts_d),
+        instance->OPS_consts_h, consts_bytes);
     memcpy(instance->OPS_gbl_prev, instance->OPS_consts_h, consts_bytes);
   }
 }
 
 void mvReductArraysToDevice(OPS_instance *instance, int reduct_bytes) {
-  cutilSafeCall(instance->ostream(), cudaMemcpy(instance->OPS_reduct_d, instance->OPS_reduct_h, reduct_bytes,
-                           cudaMemcpyHostToDevice));
+  ops_sycl_memcpyHostToDevice(
+      instance,
+      static_cast<cl::sycl::buffer<char, 1> *>(instance->OPS_reduct_d),
+      instance->OPS_reduct_h, reduct_bytes);
 }
 
 void mvReductArraysToHost(OPS_instance *instance, int reduct_bytes) {
-  cutilSafeCall(instance->ostream(), cudaMemcpy(instance->OPS_reduct_h, instance->OPS_reduct_d, reduct_bytes,
-                           cudaMemcpyDeviceToHost));
+  ops_sycl_memcpyDeviceToHost(
+      instance,
+      static_cast<cl::sycl::buffer<char, 1> *>(instance->OPS_reduct_d),
+      instance->OPS_reduct_h, reduct_bytes);
 }
 
-void ops_cuda_exit(OPS_instance *instance) {
+void ops_sycl_exit(OPS_instance *instance) {
   if (!instance->OPS_hybrid_gpu)
     return;
   if (instance->OPS_consts_bytes > 0) {
     ops_free(instance->OPS_consts_h);
-    cudaFreeHost(instance->OPS_gbl_prev);
-    cutilSafeCall(instance->ostream(), cudaFree(instance->OPS_consts_d));
+    ops_free(instance->OPS_gbl_prev);
+    delete static_cast<cl::sycl::buffer<char, 1> *>(instance->OPS_consts_d);
   }
   if (instance->OPS_reduct_bytes > 0) {
     ops_free(instance->OPS_reduct_h);
-    cutilSafeCall(instance->ostream(), cudaFree(instance->OPS_reduct_d));
+    delete static_cast<cl::sycl::buffer<char, 1> *>(instance->OPS_reduct_d);
   }
 }
 
@@ -323,6 +309,7 @@ void ops_free_dat(ops_dat dat) {
 
 // _ops_free_dat is called directly from ~ops_dat_core
 void _ops_free_dat(ops_dat dat) {
-  cutilSafeCall(dat->block->instance->ostream(), cudaFree(dat->data_d));
+  delete static_cast<cl::sycl::buffer<char, 1> *>(dat->data_d);
+  dat->data_d = nullptr;
   ops_free_dat_core(dat);
 }
