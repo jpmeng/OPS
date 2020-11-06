@@ -140,12 +140,12 @@ void ops_dat_deep_copy(ops_dat target, ops_dat source)
    int realloc = ops_dat_copy_metadata_core(target, source);
    if(realloc) {
      if (target->data_d != nullptr) {
-       delete static_cast<cl::sycl::buffer<char, 1> *>(target->data_d);
+       delete static_cast<cl::sycl::buffer<char, 1> *>((void*)target->data_d);
        target->data_d = nullptr;
      }
-     auto *buffer = new cl::sycl::buffer<char, 1>(target->data_h,
-                                                  cl::sycl::range<1>(size));
-     target->data_d = (void *)buffer;
+     auto *buffer = new cl::sycl::buffer<char, 1>(target->data,
+                                                  cl::sycl::range<1>(source->mem));
+     target->data_d = (char*)((void *)buffer);
    }
    // Metadata and buffers are set up
    // Enqueue a lazy copy of data from source to target
@@ -398,7 +398,7 @@ void ops_halo_transfer(ops_halo_group group) {
     for (int i = 1; i < halo->from->block->dims; i++)
       size *= halo->iter_size[i];
     if (size > group->instance->ops_halo_buffer_size) {
-      delete static_cast<cl::sycl::buffer<char, 1> *>(group->instance->ops_halo_buffer_d);
+      delete static_cast<cl::sycl::buffer<char, 1> *>((void*)group->instance->ops_halo_buffer_d);
       group->instance->ops_halo_buffer_d = (char *) new cl::sycl::buffer<char, 1>(cl::sycl::range<1>(size));
       group->instance->ops_halo_buffer_size = size;
     }
