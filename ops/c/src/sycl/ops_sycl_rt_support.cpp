@@ -87,6 +87,18 @@ void syclDeviceInit(OPS_instance *instance, const int argc,
   instance->OPS_hybrid_gpu = 1;
 }
 
+void *ops_sycl_register_const(void *old_p, void *new_p) {
+  if (old_p == NULL) OPS_instance::getOPSInstance()->sycl_instance->ops_sycl_consts.push_back(new_p);
+  else {
+    for (size_t i = 0; i < OPS_instance::getOPSInstance()->sycl_instance->ops_sycl_consts.size(); i++)
+      if (OPS_instance::getOPSInstance()->sycl_instance->ops_sycl_consts[i]==old_p) {
+        delete static_cast<cl::sycl::buffer<char,1>*>(OPS_instance::getOPSInstance()->sycl_instance->ops_sycl_consts[i]);
+        OPS_instance::getOPSInstance()->sycl_instance->ops_sycl_consts[i]=new_p;
+      }
+  }
+  return new_p;
+}
+
 void ops_sycl_memcpyHostToDevice(OPS_instance *instance,
                                  cl::sycl::buffer<char, 1> *data_d,
                                  char *data_h, size_t bytes) {
@@ -212,7 +224,7 @@ void ops_sycl_get_data(ops_dat dat) {
 // routine to upload data from CPU to GPU (with transposing SoA to AoS if needed)
 //
 
-void ops_cuda_put_data(ops_dat dat) {
+void ops_sycl_put_data(ops_dat dat) {
   if (dat->dirty_hd == 1)
     dat->dirty_hd = 0;
   else
@@ -301,6 +313,8 @@ void ops_sycl_exit(OPS_instance *instance) {
     ops_free(instance->OPS_reduct_h);
     delete static_cast<cl::sycl::buffer<char, 1> *>((void*)instance->OPS_reduct_d);
   }
+  for (size_t i = 0; i < OPS_instance::getOPSInstance()->sycl_instance->ops_sycl_consts.size(); i++)
+    delete static_cast<cl::sycl::buffer<char,1>*>(OPS_instance::getOPSInstance()->sycl_instance->ops_sycl_consts[i]);
 }
 
 void ops_free_dat(ops_dat dat) {

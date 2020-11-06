@@ -57,12 +57,12 @@
  * @param temp  Local memory used to store temporary values.
  * @param item_id The corresponding sycl item.
  */
-template <ops_access reduction, class T, class out_acc, class local_acc>
-void ops_reduction(out_acc dat_g, int offset, T dat_l, local_acc temp, cl::sycl::nd_item<1> &item_id) {
+template <ops_access reduction, class T, class out_acc, class local_acc, class item_type>
+void ops_reduction_sycl(out_acc dat_g, int offset, T dat_l, local_acc temp, item_type &item_id) {
 
   item_id.barrier(cl::sycl::access::fence_space::local_space); /* important to finish all previous activity */
 
-  size_t linear_id = item_id.get_local_linear_id(0);
+  size_t linear_id = item_id.get_local_linear_id();
   temp[linear_id] = dat_l;
 
   for (size_t d = item_id.get_local_range()[0] / 2; d > 0; d >>= 1) {

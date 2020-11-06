@@ -26,6 +26,7 @@ CUDART=-lcudart
 OUT := -o 
 AR := ar -r 
 OPS_LIB_SEQ=-lops_seq
+OPS_LIB_SYCL=-lops_sycl
 OPS_LIB_CUDA=-lops_cuda
 OPS_LIB_MPI=-lops_mpi
 OPS_LIB_MPI_CUDA=-lops_mpi_cuda

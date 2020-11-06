@@ -184,9 +184,9 @@ mpi_opencl: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_util.o 
 
 sycl: mklib $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o $(OBJ)/ops_checkpointing.o \
   $(OBJ)/ops_util.o $(OBJ)/ops_dummy_singlenode.o $(OBJ)/ops_checkpointing_strategy.o \
-  $(OBJ)/ops_sycl_decl.o $(OBJ)/ops_sycl_rt_support.o 
+  $(OBJ)/ops_sycl_decl.o $(OBJ)/ops_sycl_rt_support.o $(OBJ)/ops_sycl_rt_support_kernels.o 
 	ar -r $(LIB)/libops_sycl.a $(OBJ)/ops_lib_core.o $(OBJ)/ops_instance.o $(OBJ)/ops_lazy.o $(OBJ)/ops_checkpointing.o \
-		$(OBJ)/ops_util.o $(OBJ)/ops_sycl_rt_support.o $(OBJ)/ops_sycl_decl.o $(OBJ)/ops_dummy_singlenode.o \
+		$(OBJ)/ops_util.o $(OBJ)/ops_sycl_rt_support.o $(OBJ)/ops_sycl_rt_support_kernels.o $(OBJ)/ops_sycl_decl.o $(OBJ)/ops_dummy_singlenode.o \
 		$(OBJ)/ops_checkpointing_strategy.o
 
 

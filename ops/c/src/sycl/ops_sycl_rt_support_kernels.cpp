@@ -111,10 +111,11 @@
 //   }
 // }
 
-// void ops_halo_copy_tobuf(char *dest, int dest_offset, ops_dat src, int rx_s,
-//                          int rx_e, int ry_s, int ry_e, int rz_s, int rz_e,
-//                          int x_step, int y_step, int z_step, int buf_strides_x,
-//                          int buf_strides_y, int buf_strides_z) {
+ void ops_halo_copy_tobuf(char *dest, int dest_offset, ops_dat src, int rx_s,
+                          int rx_e, int ry_s, int ry_e, int rz_s, int rz_e,
+                          int x_step, int y_step, int z_step, int buf_strides_x,
+                          int buf_strides_y, int buf_strides_z) {
+      throw OPSException(OPS_INTERNAL_ERROR, "Error: halo exchange for SYCL unimplemented");
 //
 //   dest += dest_offset;
 //   int thr_x = abs(rx_s - rx_e);
@@ -145,13 +146,14 @@
 //   cutilSafeCall(src->block->instance->ostream(),cudaGetLastError());
 //
 //   // TODO: MPI buffers and GPUDirect
-// }
+}
 
-// void ops_halo_copy_frombuf(ops_dat dest, char *src, int src_offset, int rx_s,
-//                            int rx_e, int ry_s, int ry_e, int rz_s, int rz_e,
-//                            int x_step, int y_step, int z_step,
-//                            int buf_strides_x, int buf_strides_y,
-//                            int buf_strides_z) {
+ void ops_halo_copy_frombuf(ops_dat dest, char *src, int src_offset, int rx_s,
+                            int rx_e, int ry_s, int ry_e, int rz_s, int rz_e,
+                            int x_step, int y_step, int z_step,
+                            int buf_strides_x, int buf_strides_y,
+                            int buf_strides_z) {
+      throw OPSException(OPS_INTERNAL_ERROR, "Error: halo exchange for SYCL unimplemented");
 //
 //   src += src_offset;
 //   int thr_x = abs(rx_s - rx_e);
@@ -181,7 +183,7 @@
 //       buf_strides_y, buf_strides_z, dest->type_size, dest->dim, dest->block->instance->OPS_soa);
 //   cutilSafeCall(dest->block->instance->ostream(),cudaGetLastError());
 //   dest->dirty_hd = 2;
-// }
+}
 
 void ops_internal_copy_sycl(ops_kernel_descriptor *desc) {
   int reverse = strcmp(desc->name, "ops_internal_copy_sycl_reverse") == 0;
@@ -219,8 +221,8 @@ void ops_internal_copy_sycl(ops_kernel_descriptor *desc) {
 #endif
 #endif
 #endif
-  auto *dat0_buf = static_cast<cl::sycl::buffer<char, 1> *>(dat0.data_d);
-  auto *dat1_buf = static_cast<cl::sycl::buffer<char, 1> *>(dat1.data_d);
+  auto *dat0_buf = static_cast<cl::sycl::buffer<char, 1> *>((void*)dat0->data_d);
+  auto *dat1_buf = static_cast<cl::sycl::buffer<char, 1> *>((void*)dat1->data_d);
   assert(false && "implement deep copy for not whole copies");
   if (!reverse) {
 #ifdef SYCL_COPY
@@ -239,7 +241,7 @@ void ops_internal_copy_sycl(ops_kernel_descriptor *desc) {
     auto HostAccessor0 = (*dat0_buf).get_access<cl::sycl::access::mode::read>();
     auto HostAccessor1 =
         (*dat1_buf).get_access<cl::sycl::access::mode::write>();
-    for (size_t i = 0; i < size; i++)
+    for (size_t i = 0; i < dat0->mem; i++)
       HostAccessor1[i] = HostAccessor0[i];
 #endif
   } else {
@@ -259,7 +261,7 @@ void ops_internal_copy_sycl(ops_kernel_descriptor *desc) {
     auto HostAccessor0 =
         (*dat0_buf).get_access<cl::sycl::access::mode::write>();
     auto HostAccessor1 = (*dat1_buf).get_access<cl::sycl::access::mode::read>();
-    for (size_t i = 0; i < size; i++)
+    for (size_t i = 0; i < dat0->mem; i++)
       HostAccessor0[i] = HostAccessor1[i];
 #endif
   }
