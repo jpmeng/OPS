@@ -149,7 +149,7 @@ void ops_cpHostToDevice(OPS_instance *instance, void **data_d, void **data_h,
 }
 
 void ops_download_dat(ops_dat dat) {
-  ops_sycl_memcpyHostToDevice(
+  ops_sycl_memcpyDeviceToHost(
       dat->block->instance,
       static_cast<cl::sycl::buffer<char, 1> *>((void*)dat->data_d), dat->data,
       dat->mem);
