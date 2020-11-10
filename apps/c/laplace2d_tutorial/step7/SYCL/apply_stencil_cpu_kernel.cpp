@@ -73,7 +73,7 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
   #endif //OPS_MPI
 
   int maxblocks = (end[0]-start[0]-1)/block->instance->OPS_block_size_x+1;
-  maxblocks += (end[1]-start[1]-1)/block->instance->OPS_block_size_y+1;
+  maxblocks *= (end[1]-start[1]-1)/block->instance->OPS_block_size_y+1;
 
   int reduct_bytes = 0;
   size_t reduct_size = 0;
@@ -92,16 +92,13 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
 
   mvReductArraysToDevice(block->instance,reduct_bytes);
 
-  cl::sycl::buffer<double,1> lerror = static_cast<cl::sycl::buffer<char,1> *>((void*)block->instance->OPS_reduct_d)->reinterpret<double,1>(cl::sycl::range<1>(reduct_bytes/sizeof(double) ));
-
-
+  cl::sycl::buffer<double,1> lerror = static_cast<cl::sycl::buffer<char,1> *>((void*)block->instance->OPS_reduct_d)->reinterpret<double,1>(cl::sycl::range<1>(block->instance->OPS_reduct_bytes/sizeof(double) ));
 
   #ifndef OPS_LAZY
   //Halo Exchanges
   ops_H_D_exchanges_device(args, 3);
   ops_halo_exchanges(args,3,range);
   #endif
-
   if (block->instance->OPS_diags > 1) {
     ops_timers_core(&__c1,&__t1);
     block->instance->OPS_kernels[4].mpi_time += __t1-__t2;
@@ -109,6 +106,7 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
 
   int start_0 = start[0];
   int start_1 = start[1];
+  int end_0 = end[0];
   //  #########################  - SYCL CODE FROM HERE -  ########################
   block->instance->sycl_instance->queue->submit([&](cl::sycl::handler &cgh) {
     //accessors
@@ -116,8 +114,8 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
     auto Accessor_Anew = Anew.get_access<cl::sycl::access::mode::read_write>(cgh);
     auto Accessor_error = lerror.get_access<cl::sycl::access::mode::write>(cgh);
     cl::sycl::accessor<double, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local>
-        local_mem(cl::sycl::range<1>(256),cgh);
-        
+      local_mem(cl::sycl::range<1>(block->instance->OPS_block_size_x*block->instance->OPS_block_size_y),cgh);
+ 
     cgh.parallel_for<class MyLaplace>(cl::sycl::nd_range<2>(cl::sycl::range<2>(end[0]-start[0],end[1]-start[1]),cl::sycl::range<2>(block->instance->OPS_block_size_x, block->instance->OPS_block_size_y)), [=](cl::sycl::nd_item<2> item) {
       cl::sycl::cl_int n_x = item.get_global_id()[0]+start_0;
       cl::sycl::cl_int n_y = item.get_global_id()[1]+start_1;
@@ -125,57 +123,26 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
       const ACC<double> A(xdim0_apply_stencil, &Accessor_A[0] + base0 + n_x*1 + n_y * xdim0_apply_stencil*1);
       ACC<double> Anew(xdim1_apply_stencil, &Accessor_Anew[0] + base1 + n_x*1 + n_y * xdim1_apply_stencil*1);
       double error[1];
-      error[0] = p_a2[0];
+      error[0] = -INFINITY_double;
       
       // #USER CODE
       Anew(0,0) = 0.25f * ( A(1,0) + A(-1,0)
           + A(0,-1) + A(0,1));
       *error = cl::sycl::fmax( *error, cl::sycl::fabs(Anew(0,0)-A(0,0)));
-      
       // ERROR REDUCTION:
       ops_reduction_sycl<OPS_MAX>(Accessor_error, item.get_group_linear_id(), error[0], local_mem, item);
-      /*
-      for(int i = 256/2; i > 0; i /= 2) {
-        if(linear_id < i){
-          local_mem[linear_id] = cl::sycl::fmax(local_mem[linear_id],local_mem[linear_id+i]);
-        }
-        // BARRIER
-        item.barrier(cl::sycl::access::fence_space::local_space);
-      }
-      */
-      /*if(linear_id == 0){
-        Accessor4[item.get_group_linear_id()] = local_mem[0];
-      }
-      */
     });
   });
 {
   auto HostAccessor = lerror.get_access<cl::sycl::access::mode::read>();
-  for(int i = 0; i < lerror.get_count(); i++){
+  p_a2[0] = HostAccessor[0];
+  for(int i = 1; i < maxblocks; i++){
     p_a2[0] = MAX(p_a2[0],HostAccessor[i]);
   }
 }
 
-/*      
-  for ( int n_y=start[1]; n_y<end[1]; n_y++ ){
-    
-    for ( int n_x=start[0]; n_x<end[0]; n_x++ ){
-      const ACC<double> A(xdim0_apply_stencil, A_p + n_x*1 + n_y * xdim0_apply_stencil*1);
-      ACC<double> Anew(xdim1_apply_stencil, Anew_p + n_x*1 + n_y * xdim1_apply_stencil*1);
-      double error[1];
-      error[0] = p_a2[0];
-      OB
-      Anew(0,0) = 0.25f * ( A(1,0) + A(-1,0)
-          + A(0,-1) + A(0,1));
-      *error = fmax( *error, fabs(Anew(0,0)-A(0,0)));
-
-      p_a2_0 = MAX(p_a2_0,error[0]);
-    }
-  }
-
-  p_a2[0] = p_a2_0;
-*/
   if (block->instance->OPS_diags > 1) {
+    block->instance->sycl_instance->queue->wait();
     ops_timers_core(&__c2,&__t2);
     block->instance->OPS_kernels[4].time += __t2-__t1;
   }
@@ -183,7 +150,6 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
   ops_set_dirtybit_device(args, 3);
   ops_set_halo_dirtybit3(&args[1],range);
   #endif
-
   if (block->instance->OPS_diags > 1) {
     //Update kernel record
     ops_timers_core(&__c1,&__t1);
