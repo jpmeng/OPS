@@ -229,7 +229,7 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
       const = consts[nc]['name'].replace('"','')
       if re.search(r'\b'+const+r'\b',kernel_text):
         global_consts = global_consts + ['auto '+const+'_sycl = (*'+const+'_p).template get_access<cl::sycl::access::mode::read>(cgh);']
-        if int(consts[nc]['dim'])==1:
+        if consts[nc]['dim'].isdigit() and int(consts[nc]['dim'])==1:
             kernel_text = re.sub(r'\b'+const+r'\b',const+'_sycl[0]',kernel_text)
         else:
             kernel_text = re.sub(r'\b'+const+r'\b',const+'_sycl',kernel_text)
@@ -344,8 +344,6 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
     for n in range (0, nargs):
       if arg_typ[n] == 'ops_arg_dat':
           code('int base'+str(n)+' = args['+str(n)+'].dat->base_offset/sizeof('+typs[n]+');')
-          ## TODO should be fine until this point
-          ## TODO not to forget handling global consts
           code('cl::sycl::buffer<'+typs[n]+',1> '+clean_type(arg_list[n])+'_p = static_cast<cl::sycl::buffer<char,1> *>((void*)args['+str(n)+'].data_d)->reinterpret<'+typs[n]+',1>(cl::sycl::range<1>(args['+str(n)+'].dat->mem/sizeof('+typs[n]+')));')
           #code(typs[n]+' * __restrict__ '+clean_type(arg_list[n])+'_p = ('+typs[n]+' *)(args['+str(n)+'].data + base'+str(n)+');')
           if restrict[n] == 1 or prolong[n] == 1:
@@ -368,7 +366,10 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
             code('#endif')
       elif arg_typ[n] == 'ops_arg_gbl':
         if accs[n] == OPS_READ:
-          code(typs[n]+' * __restrict__ '+clean_type(arg_list[n])+' = ('+typs[n]+' *)args['+str(n)+'].data;')
+          if dims[n].isdigit() and int(dims[n])==1:
+            code(typs[n]+' '+clean_type(arg_list[n])+'_val = *('+typs[n]+' *)args['+str(n)+'].data;')
+          else:
+            code(typs[n]+' *arg'+str(n)+'h = ('+typs[n]+' *)args['+str(n)+'].data;')
         else:
           code('#ifdef OPS_MPI')
           code(typs[n]+' * __restrict__ p_a'+str(n)+' = ('+typs[n]+' *)(((ops_reduction)args['+str(n)+'].data)->data + ((ops_reduction)args['+str(n)+'].data)->size * block->index);')
@@ -449,6 +450,7 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
         if accs[n] == OPS_READ and (not dims[n].isdigit() or int(dims[n])>1):
           code('consts_bytes = 0;')
           code('arg'+str(n)+'.data = block->instance->OPS_consts_h + consts_bytes;')
+          code('int arg'+str(n)+'_offset = consts_bytes;')
           code('for (int d=0; d<'+str(dims[n])+'; d++) (('+typs[n]+' *)arg'+str(n)+'.data)[d] = arg'+str(n)+'h[d];')
           code('consts_bytes += ROUND_UP('+str(dims[n])+'*sizeof(int));')
     if GBL_READ == True and GBL_READ_MDIM == True:
@@ -475,6 +477,7 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
 
     for d in range(0, NDIM):
       code('int start_'+str(d)+' = start['+str(d)+'];')
+      code('int end_'+str(d)+' = end['+str(d)+'];')
       if arg_idx != -1:
         code('int arg_idx_'+str(d)+' = arg_idx['+str(d)+'];')
 
@@ -494,7 +497,18 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
       code(c)
     code('')
 
-    code('cgh.parallel_for<class '+name+'_kernel>(cl::sycl::nd_range<'+str(NDIM)+'>(cl::sycl::range<'+str(NDIM)+'>(end[0]-start[0],end[1]-start[1]),cl::sycl::range<'+str(NDIM)+'>(block->instance->OPS_block_size_x, block->instance->OPS_block_size_y)), [=](cl::sycl::nd_item<'+str(NDIM)+'> item) {')
+    code('cgh.parallel_for<class '+name+'_kernel>(cl::sycl::nd_range<'+str(NDIM)+'>(cl::sycl::range<'+str(NDIM)+'>(')
+    code('      ((end[0]-start[0]-1)/block->instance->OPS_block_size_x+1)*block->instance->OPS_block_size_x')
+    if NDIM>1:
+      code('     ,((end[1]-start[1]-1)/block->instance->OPS_block_size_y+1)*block->instance->OPS_block_size_y')
+    if NDIM>2:
+      code('     ,((end[2]-start[2]-1)/block->instance->OPS_block_size_z+1)*block->instance->OPS_block_size_z')
+    code('       ),cl::sycl::range<'+str(NDIM)+'>(block->instance->OPS_block_size_x')
+    if NDIM>1:
+      code('       , block->instance->OPS_block_size_y')
+    if NDIM>2:
+      code('       , block->instance->OPS_block_size_z')
+    code('       )), [=](cl::sycl::nd_item<'+str(NDIM)+'> item) {')
     config.depth += 2
     line3 = ''
     for n in range (0,nargs):
@@ -577,10 +591,22 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
           code(typs[n]+' '+arg_list[n]+'['+str(dims[n])+'];')
           for d in range(0,int(dims[n])):
             code(arg_list[n]+'['+str(d)+'] = ZERO_'+typs[n]+';')
+        if accs[n] == OPS_READ:
+          if dims[n].isdigit() and int(dims[n])==1:
+            code('const '+typs[n]+' *'+clean_type(arg_list[n])+' = &'+clean_type(arg_list[n])+'_val;')
+          else:
+            code('const '+typs[n]+' *'+clean_type(arg_list[n])+' = ('+typs[n]+'*)&Accessor_consts_char[arg'+str(n)+'_offset];')
 
     #insert user kernel
     comm('USER CODE')
+    cond = 'n_x < end_0'
+    if NDIM>1:
+      cond = cond + ' && n_y < end_1'
+    if NDIM>2:
+      cond = cond + ' && n_z < end_2'
+    IF(cond)
     code(kernel_text);
+    ENDIF()
 
     if GBL_INC == True or GBL_MIN == True or GBL_MAX == True or GBL_WRITE == True:
       code('int group_size = item.get_local_range(0);')
@@ -589,7 +615,7 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
       if NDIM>2:
         code('group_size *= item.get_local_range(2);')
     for n in range (0,nargs):
-      if arg_typ[n] == 'ops_arg_gbl':
+      if arg_typ[n] == 'ops_arg_gbl' and accs[n] != OPS_READ:
         FOR('d', '0', dims[n])
         if accs[n] == OPS_MIN:
           code('ops_reduction_sycl<OPS_MIN>((('+typs[n]+'*)&Accessor_reduct_char[arg'+str(n)+'_offset]) + d+item.get_group_linear_id()*'+str(dims[n])+', '+arg_list[n]+'['+str(d)+'], ('+typs[n]+'*)&local_mem[0], item, group_size);')

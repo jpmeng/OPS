@@ -72,6 +72,7 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
   double * __restrict__ p_a2 = (double *)((ops_reduction)args[2].data)->data;
   #endif //OPS_MPI
 
+
   int maxblocks = (end[0]-start[0]-1)/block->instance->OPS_block_size_x+1;
   maxblocks *= (end[1]-start[1]-1)/block->instance->OPS_block_size_y+1;
   int reduct_bytes = 0;
@@ -104,7 +105,9 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
   }
 
   int start_0 = start[0];
+  int end_0 = end[0];
   int start_1 = start[1];
+  int end_1 = end[1];
   block->instance->sycl_instance->queue->submit([&](cl::sycl::handler &cgh) {
     //accessors
     auto Accessor_A = A_p.get_access<cl::sycl::access::mode::read_write>(cgh);
@@ -113,7 +116,12 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
     cl::sycl::accessor<char, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> local_mem(reduct_size*cl::sycl::range<1>(block->instance->OPS_block_size_x*block->instance->OPS_block_size_y),cgh);
 
 
-    cgh.parallel_for<class apply_stencil_kernel>(cl::sycl::nd_range<2>(cl::sycl::range<2>(end[0]-start[0],end[1]-start[1]),cl::sycl::range<2>(block->instance->OPS_block_size_x, block->instance->OPS_block_size_y)), [=](cl::sycl::nd_item<2> item) {
+    cgh.parallel_for<class apply_stencil_kernel>(cl::sycl::nd_range<2>(cl::sycl::range<2>(
+          ((end[0]-start[0]-1)/block->instance->OPS_block_size_x+1)*block->instance->OPS_block_size_x
+         ,((end[1]-start[1]-1)/block->instance->OPS_block_size_y+1)*block->instance->OPS_block_size_y
+           ),cl::sycl::range<2>(block->instance->OPS_block_size_x
+           , block->instance->OPS_block_size_y
+           )), [=](cl::sycl::nd_item<2> item) {
       cl::sycl::cl_int n_y = item.get_global_id()[1]+start_1;
       cl::sycl::cl_int n_x = item.get_global_id()[0]+start_0;
       const ACC<double> A(xdim0_apply_stencil, &Accessor_A[0] + base0 + n_x*1 + n_y * xdim0_apply_stencil*1);
@@ -121,11 +129,13 @@ void ops_par_loop_apply_stencil_execute(ops_kernel_descriptor *desc) {
       double error[1];
       error[0] = -INFINITY_double;
       //USER CODE
-      
+      if (n_x < end_0 && n_y < end_1) {
+        
   Anew(0,0) = 0.25f * ( A(1,0) + A(-1,0)
       + A(0,-1) + A(0,1));
   *error = cl::sycl::fmax( *error, cl::sycl::fabs(Anew(0,0)-A(0,0)));
 
+      }
       int group_size = item.get_local_range(0);
       group_size *= item.get_local_range(1);
       for ( int d=0; d<1; d++ ){
