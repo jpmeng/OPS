@@ -29,11 +29,11 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## @file
-## @brief OPS MPI_seq code generator
+## @brief OPS SYCL code generator
 #
 #  This routine is called by ops.py which parses the input files
 #
-#  It produces a file xxx_cpu_kernel.cpp for each kernel,
+#  It produces a file xxx_sycl_kernel.cpp for each kernel,
 #  plus a master kernel file
 #
 
@@ -42,7 +42,7 @@ OPS MPI_seq code generator
 
 This routine is called by ops.py which parses the input files
 
-It produces a file xxx_cpu_kernel.cpp for each kernel,
+It produces a file xxx_sycl_kernel.cpp for each kernel,
 plus a master kernel file
 
 """
@@ -224,6 +224,24 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
     m = text.find(name)
     arg_list = parse_signature(text[i2+len(name):i+j])
 
+    global_consts = []
+    for nc in range (0,len(consts)):
+      const = consts[nc]['name'].replace('"','')
+      if re.search(r'\b'+const+r'\b',kernel_text):
+        global_consts = global_consts + ['auto '+const+'_sycl = (*'+const+'_p).template get_access<cl::sycl::access::mode::read>(cgh);']
+        if int(consts[nc]['dim'])==1:
+            kernel_text = re.sub(r'\b'+const+r'\b',const+'_sycl[0]',kernel_text)
+        else:
+            kernel_text = re.sub(r'\b'+const+r'\b',const+'_sycl',kernel_text)
+
+    kernel_text = re.sub(r'\bsqrt\b','cl::sycl::sqrt',kernel_text)
+    kernel_text = re.sub(r'\bcbrt\b','cl::sycl::cbrt',kernel_text)
+    kernel_text = re.sub(r'\bfabs\b','cl::sycl::fabs',kernel_text)
+    kernel_text = re.sub(r'\bfmin\b','cl::sycl::fmin',kernel_text)
+    kernel_text = re.sub(r'\bfmax\b','cl::sycl::fmax',kernel_text)
+    kernel_text = re.sub(r'\bisnan\b','cl::sycl::isnan',kernel_text)
+    kernel_text = re.sub(r'\bisinf\b','cl::sycl::isinf',kernel_text)
+
     comm('')
     comm(' host stub function')
     code('#ifndef OPS_LAZY')
@@ -328,7 +346,8 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
           code('int base'+str(n)+' = args['+str(n)+'].dat->base_offset/sizeof('+typs[n]+');')
           ## TODO should be fine until this point
           ## TODO not to forget handling global consts
-          code(typs[n]+' * __restrict__ '+clean_type(arg_list[n])+'_p = ('+typs[n]+' *)(args['+str(n)+'].data + base'+str(n)+');')
+          code('cl::sycl::buffer<'+typs[n]+',1> '+clean_type(arg_list[n])+'_p = static_cast<cl::sycl::buffer<char,1> *>((void*)args['+str(n)+'].data_d)->reinterpret<'+typs[n]+',1>(cl::sycl::range<1>(args['+str(n)+'].dat->mem/sizeof('+typs[n]+')));')
+          #code(typs[n]+' * __restrict__ '+clean_type(arg_list[n])+'_p = ('+typs[n]+' *)(args['+str(n)+'].data + base'+str(n)+');')
           if restrict[n] == 1 or prolong[n] == 1:
             code('#ifdef OPS_MPI')
             code('sub_dat_list sd'+str(n)+' = OPS_sub_dat_list[args['+str(n)+'].dat->index];')
@@ -358,15 +377,94 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
           code('#endif //OPS_MPI')
         code('')
       code('')
+
+    GBL_READ = False
+    GBL_READ_MDIM = False
+    GBL_INC = False
+    GBL_MAX = False
+    GBL_MIN = False
+    GBL_WRITE = False
+
+    #set up reduction variables
+    for n in range (0, nargs):
+      if arg_typ[n] == 'ops_arg_gbl':
+        if accs[n] == OPS_READ:
+          GBL_READ = True
+          if not dims[n].isdigit() or int(dims[n])>1:
+            GBL_READ_MDIM = True
+        if accs[n] == OPS_INC:
+          GBL_INC = True
+        if accs[n] == OPS_MAX:
+          GBL_MAX = True
+        if accs[n] == OPS_MIN:
+          GBL_MIN = True
+        if accs[n] == OPS_WRITE:
+          GBL_WRITE = True
+
+    if GBL_INC == True or GBL_MIN == True or GBL_MAX == True or GBL_WRITE == True:
+      code('int maxblocks = (end[0]-start[0]-1)/block->instance->OPS_block_size_x+1;')
+      if NDIM>1:
+        code('maxblocks *= (end[1]-start[1]-1)/block->instance->OPS_block_size_y+1;')
+      if NDIM>2:
+        code('maxblocks *= (end[2]-start[2]-1)/block->instance->OPS_block_size_z+1;')
+      code('int reduct_bytes = 0;')
+      code('size_t reduct_size = 0;')
+      code('')
+    if GBL_READ == True and GBL_READ_MDIM == True:
+      code('int consts_bytes = 0;')
+      code('')
+
+    for n in range (0, nargs):
+      if arg_typ[n] == 'ops_arg_gbl':
+        if accs[n] == OPS_READ and (not dims[n].isdigit() or int(dims[n])>1):
+          code('consts_bytes += ROUND_UP('+str(dims[n])+'*sizeof('+typs[n]+'));')
+        elif accs[n] != OPS_READ:
+          code('reduct_bytes += ROUND_UP(maxblocks*'+str(dims[n])+'*sizeof('+typs[n]+'));')
+          code('reduct_size = MAX(reduct_size,sizeof('+typs[n]+'));')
     code('')
+
+    if GBL_READ == True and GBL_READ_MDIM == True:
+      code('reallocConstArrays(block->instance,consts_bytes);')
+    if GBL_INC == True or GBL_MIN == True or GBL_MAX == True or GBL_WRITE == True:
+      code('reallocReductArrays(block->instance,reduct_bytes);')
+      code('reduct_bytes = 0;')
+      code('')
+
+    for n in range (0, nargs):
+      if arg_typ[n] == 'ops_arg_gbl' and accs[n] <> OPS_READ:
+        code('arg'+str(n)+'.data = block->instance->OPS_reduct_h + reduct_bytes;')
+        code('int arg'+str(n)+'_offset = reduct_bytes;')
+        code('for (int b=0; b<maxblocks; b++)')
+        if accs[n] == OPS_INC:
+          code('for (int d=0; d<'+str(dims[n])+'; d++) (('+typs[n]+' *)arg'+str(n)+'.data)[d+b*'+str(dims[n])+'] = ZERO_'+typs[n]+';')
+        if accs[n] == OPS_MAX:
+          code('for (int d=0; d<'+str(dims[n])+'; d++) (('+typs[n]+' *)arg'+str(n)+'.data)[d+b*'+str(dims[n])+'] = -INFINITY_'+typs[n]+';')
+        if accs[n] == OPS_MIN:
+          code('for (int d=0; d<'+str(dims[n])+'; d++) (('+typs[n]+' *)arg'+str(n)+'.data)[d+b*'+str(dims[n])+'] = INFINITY_'+typs[n]+';')
+        code('reduct_bytes += ROUND_UP(maxblocks*'+str(dims[n])+'*sizeof('+typs[n]+'));')
+        code('')
+
+    for n in range (0, nargs):
+      if arg_typ[n] == 'ops_arg_gbl':
+        if accs[n] == OPS_READ and (not dims[n].isdigit() or int(dims[n])>1):
+          code('consts_bytes = 0;')
+          code('arg'+str(n)+'.data = block->instance->OPS_consts_h + consts_bytes;')
+          code('for (int d=0; d<'+str(dims[n])+'; d++) (('+typs[n]+' *)arg'+str(n)+'.data)[d] = arg'+str(n)+'h[d];')
+          code('consts_bytes += ROUND_UP('+str(dims[n])+'*sizeof(int));')
+    if GBL_READ == True and GBL_READ_MDIM == True:
+      code('mvConstArraysToDevice(block->instance,consts_bytes);')
+      code('cl::sycl::buffer<char,1> *consts = static_cast<cl::sycl::buffer<char,1> *>((void*)block->instance->OPS_consts_d);')
+
+    if GBL_INC == True or GBL_MIN == True or GBL_MAX == True or GBL_WRITE == True:
+      code('mvReductArraysToDevice(block->instance,reduct_bytes);')
+      code('cl::sycl::buffer<char,1> *reduct = static_cast<cl::sycl::buffer<char,1> *>((void*)block->instance->OPS_reduct_d);')
 
     code('')
 
     code('#ifndef OPS_LAZY')
     comm('Halo Exchanges')
-    code('ops_H_D_exchanges_host(args, '+str(nargs)+');')
+    code('ops_H_D_exchanges_device(args, '+str(nargs)+');')
     code('ops_halo_exchanges(args,'+str(nargs)+',range);')
-    code('ops_H_D_exchanges_host(args, '+str(nargs)+');')
     code('#endif')
     code('')
     IF('block->instance->OPS_diags > 1')
@@ -375,60 +473,46 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
     ENDIF()
     code('')
 
-    for n in range (0,nargs):
-      if arg_typ[n] == 'ops_arg_gbl':
-        if accs[n] != OPS_READ:
-          for d in range(0,int(dims[n])):
-            code(typs[n]+' p_a'+str(n)+'_'+str(d)+' = p_a'+str(n)+'['+str(d)+'];')
+    for d in range(0, NDIM):
+      code('int start_'+str(d)+' = start['+str(d)+'];')
+      if arg_idx != -1:
+        code('int arg_idx_'+str(d)+' = arg_idx['+str(d)+'];')
 
-    line = ''
-    for n in range (0,nargs):
-      if arg_typ[n] == 'ops_arg_gbl':
-        if accs[n] == OPS_MIN:
-          for d in range(0,int(dims[n])):
-            line = line + ' reduction(min:p_a'+str(n)+'_'+str(d)+')'
-        if accs[n] == OPS_MAX:
-          for d in range(0,int(dims[n])):
-            line = line + ' reduction(max:p_a'+str(n)+'_'+str(d)+')'
-        if accs[n] == OPS_INC:
-          for d in range(0,int(dims[n])):
-            line = line + ' reduction(+:p_a'+str(n)+'_'+str(d)+')'
-        if accs[n] == OPS_WRITE: #this may not be correct ..
-          for d in range(0,int(dims[n])):
-            line = line + ' reduction(+:p_a'+str(n)+'_'+str(d)+')'
-    if NDIM==3 and reduction==0:
-      line2 = ' collapse(2)'
-    else:
-      line2 = line
-    code('#pragma omp parallel for'+line2)
-    if NDIM>2:
-      FOR('n_z','start[2]','end[2]')
-    if NDIM>1:
-      FOR('n_y','start[1]','end[1]')
+    code('block->instance->sycl_instance->queue->submit([&](cl::sycl::handler &cgh) {')
+    config.depth += 2
+    comm('accessors')
+    for n in range(0,nargs):
+      if arg_typ[n] == 'ops_arg_dat':
+        code('auto Accessor_'+clean_type(arg_list[n])+' = '+clean_type(arg_list[n])+'_p.get_access<cl::sycl::access::mode::read_write>(cgh);')
+    if GBL_READ == True and GBL_READ_MDIM == True:
+      code('auto Accessor_consts_char = consts->get_access<cl::sycl::access::mode::read_write>(cgh);')
+    if GBL_INC == True or GBL_MIN == True or GBL_MAX == True or GBL_WRITE == True:
+      code('auto Accessor_reduct_char = reduct->get_access<cl::sycl::access::mode::read_write>(cgh);')
+      code('cl::sycl::accessor<char, 1, cl::sycl::access::mode::read_write, cl::sycl::access::target::local> local_mem(reduct_size*cl::sycl::range<1>(block->instance->OPS_block_size_x*block->instance->OPS_block_size_y),cgh);')
+    code('')
+    for c in global_consts:
+      code(c)
+    code('')
 
+    code('cgh.parallel_for<class '+name+'_kernel>(cl::sycl::nd_range<'+str(NDIM)+'>(cl::sycl::range<'+str(NDIM)+'>(end[0]-start[0],end[1]-start[1]),cl::sycl::range<'+str(NDIM)+'>(block->instance->OPS_block_size_x, block->instance->OPS_block_size_y)), [=](cl::sycl::nd_item<'+str(NDIM)+'> item) {')
+    config.depth += 2
     line3 = ''
     for n in range (0,nargs):
       if arg_typ[n] == 'ops_arg_dat':
         line3 = line3 +arg_list[n]+','
+    #FOR('n_x','start[0]','end[0]')
+    if NDIM>2:
+      code('cl::sycl::cl_int n_z = item.get_global_id()[2]+start_2;')
     if NDIM>1:
-      code('#ifdef __INTEL_COMPILER')
-      code('#pragma loop_count(10000)')
-      code('#pragma omp simd'+line) #+' aligned('+clean_type(line3[:-1])+')')
-      code('#elif defined(__clang__)')
-      code('#pragma clang loop vectorize(assume_safety)')
-      code('#elif defined(__GNUC__)')
-      code('#pragma GCC ivdep')
-      code('#else')
-      code('#pragma simd')
-      code('#endif')
-    FOR('n_x','start[0]','end[0]')
+      code('cl::sycl::cl_int n_y = item.get_global_id()[1]+start_1;')
+    code('cl::sycl::cl_int n_x = item.get_global_id()[0]+start_0;')
     if arg_idx != -1:
       if NDIM==1:
-        code('int '+clean_type(arg_list[arg_idx])+'[] = {arg_idx[0]+n_x};')
+        code('int '+clean_type(arg_list[arg_idx])+'[] = {arg_idx_0+n_x};')
       elif NDIM==2:
-        code('int '+clean_type(arg_list[arg_idx])+'[] = {arg_idx[0]+n_x, arg_idx[1]+n_y};')
+        code('int '+clean_type(arg_list[arg_idx])+'[] = {arg_idx_0+n_x, arg_idx_1+n_y};')
       elif NDIM==3:
-        code('int '+clean_type(arg_list[arg_idx])+'[] = {arg_idx[0]+n_x, arg_idx[1]+n_y, arg_idx[2]+n_z};')
+        code('int '+clean_type(arg_list[arg_idx])+'[] = {arg_idx_0+n_x, arg_idx_1+n_y, arg_idx_2+n_z};')
 
     for n in range (0, nargs):
       if arg_typ[n] == 'ops_arg_dat':
@@ -470,21 +554,21 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
 
         if not dims[n].isdigit() or int(dims[n])>1:
           code('#ifdef OPS_SOA')
-        code(pre + 'ACC<'+typs[n]+'> '+arg_list[n]+'('+dim+sizelist+arg_list[n]+'_p + '+offset+');')
+        code(pre + 'ACC<'+typs[n]+'> '+arg_list[n]+'('+dim+sizelist+'&Accessor_'+arg_list[n]+'[0] + base'+str(n)+' + '+offset+');')
         if not dims[n].isdigit() or int(dims[n])>1:
           code('#else')
-          code(pre + 'ACC<'+typs[n]+'> '+arg_list[n]+'('+dim+sizelist+arg_list[n]+'_p + '+dim[:-2]+'*('+offset+'));')
+          code(pre + 'ACC<'+typs[n]+'> '+arg_list[n]+'('+dim+sizelist+'&Accessor_'+arg_list[n]+'[0] + '+dim[:-2]+'*('+offset+'));')
           code('#endif')
     for n in range (0,nargs):
       if arg_typ[n] == 'ops_arg_gbl':
         if accs[n] == OPS_MIN:
           code(typs[n]+' '+arg_list[n]+'['+str(dims[n])+'];')
           for d in range(0,int(dims[n])):
-            code(arg_list[n]+'['+str(d)+'] = p_a'+str(n)+'['+str(d)+'];') #need +INFINITY_ change to
+            code(arg_list[n]+'['+str(d)+'] = +INFINITY_'+typs[n]+';') #need +INFINITY_ change to
         if accs[n] == OPS_MAX:
           code(typs[n]+' '+arg_list[n]+'['+str(dims[n])+'];')
           for d in range(0,int(dims[n])):
-            code(arg_list[n]+'['+str(d)+'] = p_a'+str(n)+'['+str(d)+'];') #need -INFINITY_ change to
+            code(arg_list[n]+'['+str(d)+'] = -INFINITY_'+typs[n]+';') #need -INFINITY_ change to
         if accs[n] == OPS_INC:
           code(typs[n]+' '+arg_list[n]+'['+str(dims[n])+'];')
           for d in range(0,int(dims[n])):
@@ -495,42 +579,68 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
             code(arg_list[n]+'['+str(d)+'] = ZERO_'+typs[n]+';')
 
     #insert user kernel
+    comm('USER CODE')
     code(kernel_text);
 
+    if GBL_INC == True or GBL_MIN == True or GBL_MAX == True or GBL_WRITE == True:
+      code('int group_size = item.get_local_range(0);')
+      if NDIM>1:
+        code('group_size *= item.get_local_range(1);')
+      if NDIM>2:
+        code('group_size *= item.get_local_range(2);')
     for n in range (0,nargs):
       if arg_typ[n] == 'ops_arg_gbl':
+        FOR('d', '0', dims[n])
         if accs[n] == OPS_MIN:
-          for d in range(0,int(dims[n])):
-            code('p_a'+str(n)+'_'+str(d)+' = MIN(p_a'+str(n)+'_'+str(d)+','+arg_list[n]+'['+str(d)+']);')
+          code('ops_reduction_sycl<OPS_MIN>((('+typs[n]+'*)&Accessor_reduct_char[arg'+str(n)+'_offset]) + d+item.get_group_linear_id()*'+str(dims[n])+', '+arg_list[n]+'['+str(d)+'], ('+typs[n]+'*)&local_mem[0], item, group_size);')
         if accs[n] == OPS_MAX:
-          for d in range(0,int(dims[n])):
-            code('p_a'+str(n)+'_'+str(d)+' = MAX(p_a'+str(n)+'_'+str(d)+','+arg_list[n]+'['+str(d)+']);')
+          #code('ops_reduction_sycl<OPS_MAX>(Accessor_'+arg_list[n]+', item.get_group_linear_id(), '+arg_list[n]+'['+str(d)+'], ('+typs[n]+'*)&local_mem[0], item);')
+          code('ops_reduction_sycl<OPS_MAX>((('+typs[n]+'*)&Accessor_reduct_char[arg'+str(n)+'_offset]) + d+item.get_group_linear_id()*'+str(dims[n])+', '+arg_list[n]+'['+str(d)+'], ('+typs[n]+'*)&local_mem[0], item, group_size);')
         if accs[n] == OPS_INC:
-          for d in range(0,int(dims[n])):
-            code('p_a'+str(n)+'_'+str(d)+' +='+arg_list[n]+'['+str(d)+'];')
+          code('ops_reduction_sycl<OPS_INC>((('+typs[n]+'*)&Accessor_reduct_char[arg'+str(n)+'_offset]) + d+item.get_group_linear_id()*'+str(dims[n])+', '+arg_list[n]+'['+str(d)+'], ('+typs[n]+'*)&local_mem[0], item, group_size);')
         if accs[n] == OPS_WRITE: #this may not be correct
-          for d in range(0,int(dims[n])):
-            code('p_a'+str(n)+'_'+str(d)+' +='+arg_list[n]+'['+str(d)+'];')
+          #code('p_a'+str(n)+'_'+str(d)+' +='+arg_list[n]+'['+str(d)+'];')
+          code('ops_reduction_sycl<OPS_MIN>((('+typs[n]+'*)&Accessor_reduct_char[arg'+str(n)+'_offset]) + d+item.get_group_linear_id()*'+str(dims[n])+', '+arg_list[n]+'['+str(d)+'], ('+typs[n]+'*)&local_mem[0], item, group_size);')
+        ENDFOR()
+    
+    config.depth -= 2
+    code('});')
+    config.depth -= 2
+    code('});')
+    #ENDFOR()
+    #if NDIM>1:
+      #ENDFOR()
+    #if NDIM>2:
+      #ENDFOR()
 
-    ENDFOR()
-    if NDIM>1:
-      ENDFOR()
-    if NDIM>2:
-      ENDFOR()
+    #
+    # Complete Reduction Operation by moving data onto host
+    # and reducing over blocks
+    #
+    if GBL_INC == True or GBL_MIN == True or GBL_MAX == True or GBL_WRITE == True:
+      code('mvReductArraysToHost(block->instance,reduct_bytes);')
 
     for n in range (0, nargs):
-      if arg_typ[n] == 'ops_arg_gbl':
-        if accs[n] != OPS_READ:
-          for d in range(0,int(dims[n])):
-            code('p_a'+str(n)+'['+str(d)+'] = p_a'+str(n)+'_'+str(d)+';')
-
+      if arg_typ[n] == 'ops_arg_gbl' and accs[n] != OPS_READ:
+        FOR('b','0','maxblocks')
+        FOR('d','0',str(dims[n]))
+        if accs[n] == OPS_INC:
+          code('p_a'+str(n)+'[d] = p_a'+str(n)+'[d] + (('+typs[n]+' *)arg'+str(n)+'.data)[d+b*'+str(dims[n])+'];')
+        elif accs[n] == OPS_MAX:
+          code('p_a'+str(n)+'[d] = MAX(p_a'+str(n)+'[d],(('+typs[n]+' *)arg'+str(n)+'.data)[d+b*'+str(dims[n])+']);')
+        elif accs[n] == OPS_MIN:
+          code('p_a'+str(n)+'[d] = MIN(p_a'+str(n)+'[d],(('+typs[n]+' *)arg'+str(n)+'.data)[d+b*'+str(dims[n])+']);')
+        ENDFOR()
+        ENDFOR()
+ 
     IF('block->instance->OPS_diags > 1')
+    code('block->instance->sycl_instance->queue->wait();')
     code('ops_timers_core(&__c2,&__t2);')
     code('block->instance->OPS_kernels['+str(nk)+'].time += __t2-__t1;')
     ENDIF()
 
     code('#ifndef OPS_LAZY')
-    code('ops_set_dirtybit_host(args, '+str(nargs)+');')
+    code('ops_set_dirtybit_device(args, '+str(nargs)+');')
     for n in range (0, nargs):
       if arg_typ[n] == 'ops_arg_dat' and (accs[n] == OPS_WRITE or accs[n] == OPS_RW or accs[n] == OPS_INC):
         code('ops_set_halo_dirtybit3(&args['+str(n)+'],range);')
@@ -571,7 +681,7 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
     code('desc->name = name;')
     code('desc->block = block;')
     code('desc->dim = dim;')
-    code('desc->device = 0;')
+    code('desc->device = 1;')
     code('desc->index = '+str(nk)+';')
     code('desc->hash = 5381;')
     code('desc->hash = ((desc->hash << 5) + desc->hash) + '+str(nk)+';')
@@ -609,11 +719,11 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
 #  output individual kernel file
 ##########################################################################
     try:
-      os.makedirs('./SYCL_TMP') ## TODO change DIRNAME
+      os.makedirs('./SYCL') 
     except OSError as e:
       if e.errno != os.errno.EEXIST:
         raise
-    fid = open('./SYCL_TMP/'+name+'_cpu_kernel.cpp','w')
+    fid = open('./SYCL/'+name+'_sycl_kernel.cpp','w')
     date = datetime.datetime.now()
     fid.write('//\n// auto-generated by ops.py\n//\n')
     fid.write(config.file_text)
@@ -650,6 +760,7 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
   comm(' global constants')
   for nc in range (0,len(consts)):
     code('cl::sycl::buffer<'+consts[nc]['type']+',1> *'+consts[nc]['name'].replace('"','')+'_p=nullptr;')
+    code('extern '+consts[nc]['type']+' '+consts[nc]['name'].replace('"','')+';')
   code('')
 
   code('void ops_init_backend() {}')
@@ -657,10 +768,9 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
 
   code('void ops_decl_const_char(int dim, char const * type, int size, char * dat, char const * name ) {')
   config.depth =config.depth + 2
-  code('OPS_instance *instance = OPS_instance::getOPSInstance();')
   for nc in range(0,len(consts)):
     IF('!strcmp(name,"'+(consts[nc]['name'].replace('"','')).strip()+'")')
-    code('{0}_p = static_cast<cl::buffer::<{1},1>*>(ops_sycl_register_const('
+    code('{0}_p = static_cast<cl::sycl::buffer<{1},1>*>(ops_sycl_register_const('
         '(void*){0}_p, (void*)new cl::sycl::buffer<{1},1>(({1}*)dat,'
         'cl::sycl::range<1>(dim))));'.format(consts[nc]['name'].replace('"',''),
           consts[nc]['type']))
@@ -682,7 +792,7 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
       code('#include "'+kernels[nk]['name']+'_sycl_kernel.cpp"')
       kernel_name_list.append(kernels[nk]['name'])
 
-  fid = open('./SYCL_TMP/'+master_basename[0]+'_sycl_kernels.cpp','w')
+  fid = open('./SYCL/'+master_basename[0]+'_sycl_kernels.cpp','w')
   fid.write('//\n// auto-generated by ops.py//\n\n')
   fid.write(config.file_text)
   fid.close()
