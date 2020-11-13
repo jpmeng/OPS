@@ -241,6 +241,9 @@ def ops_gen_sycl(master, date, consts, kernels, soa_set):
     kernel_text = re.sub(r'\bfmax\b','cl::sycl::fmax',kernel_text)
     kernel_text = re.sub(r'\bisnan\b','cl::sycl::isnan',kernel_text)
     kernel_text = re.sub(r'\bisinf\b','cl::sycl::isinf',kernel_text)
+    kernel_text = re.sub(r'\bsin\b','cl::sycl::sin',kernel_text)
+    kernel_text = re.sub(r'\bcos\b','cl::sycl::cos',kernel_text)
+    kernel_text = re.sub(r'\bexp\b','cl::sycl::exp',kernel_text)
 
     comm('')
     comm(' host stub function')
