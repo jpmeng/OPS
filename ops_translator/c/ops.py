@@ -643,7 +643,7 @@ def main(source_files):
               repeat = True
               which_file = nk
             else:
-              print('repeated kernel with incompatible arguments: ERROR' + kernels[nk]['name'])
+              print(('repeated kernel with incompatible arguments: ERROR' + kernels[nk]['name']))
               break
 
 

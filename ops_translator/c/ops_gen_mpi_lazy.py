@@ -51,6 +51,7 @@ import re
 import datetime
 import os
 import glob
+import errno
 
 import util
 import config
@@ -108,7 +109,7 @@ def ops_gen_mpi_lazy(master, date, consts, kernels, soa_set):
   try:
     os.makedirs('./MPI_OpenMP')
   except OSError as e:
-    if e.errno != os.errno.EEXIST:
+    if e.errno != errno.EEXIST:
       raise
 
   for nk in range (0,len(kernels)):

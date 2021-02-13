@@ -192,7 +192,7 @@ def parse_replace_ACC_signature(text, arg_typ, dims, opencl=0, accs=[], typs=[])
         for j in range(0,len(args)):
             if j == i:
               text = text + args[j].replace(typs[j],'__global '+typs[j]).replace('*', '* restrict ')+', '
-            else:    
+            else:
               text = text + args[j]+', '
         text = text[:-2]
 
