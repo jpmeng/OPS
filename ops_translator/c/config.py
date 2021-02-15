@@ -27,13 +27,40 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-## @file
-## @brief global variables for code generator
+# @file
+# @brief global variables for code generator
 
 """
 global variables for code generator
 
 """
+import json
+
+jsonConfig = False
+configuration = None
+sourceFileList = None
+kernelFileList = None
+typeDefitionList = None
+headFileList = None
+spaceDim = None
 
 file_text = ''
 depth = 0
+
+
+def ReadJsonConfiguration():
+    global configuration, jsonConfig, kernelFileList, sourceFileList, typeDefitionList, headFileList,spaceDim
+    try:
+        jsonFile = open("OPSPYConfig.json", "r")
+        configuration = (json.load(jsonFile))
+        jsonConfig = True
+        sourceFileList = configuration.get('source')
+        typeDefitionList = configuration.get('typedef')
+        kernelFileList = configuration.get('kernel')
+        headFileList = configuration.get('head')
+        spaceDim = configuration.get('spacedim')
+    except IOError:
+        jsonConfig = False
+
+
+ReadJsonConfiguration()
