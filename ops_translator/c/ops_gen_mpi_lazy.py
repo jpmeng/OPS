@@ -191,7 +191,10 @@ def ops_gen_mpi_lazy(master, date, consts, kernels, soa_set):
     comm('user function')
 
     found = 0
-    for files in glob.glob( os.path.join(src_dir,"*.h") ):
+    kernelSourceFiles = os.path.join(src_dir,"*.h")
+    if (config.jsonConfig and (config.kernelFileList != None)):
+      kernelSourceFiles = config.kernelFileList
+    for files in kernelSourceFiles:
       f = open( files, 'r' )
       for line in f:
         if name in line:
@@ -660,6 +663,9 @@ def ops_gen_mpi_lazy(master, date, consts, kernels, soa_set):
   code('#endif')
   if os.path.exists(os.path.join(src_dir, 'user_types.h')):
     code('#include "user_types.h"')
+  if (config.jsonConfig and config.headFileList != None):
+    for head in config.headFileList:
+       code('#include "'+ head + '"')
   code('')
 
   comm(' global constants')
