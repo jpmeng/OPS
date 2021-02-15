@@ -97,6 +97,7 @@ from ops_gen_mpi_hip import ops_gen_mpi_hip
 from ops_gen_mpi_openacc import ops_gen_mpi_openacc
 from ops_gen_mpi_opencl import ops_gen_mpi_opencl
 
+import config as cg
 import util
 
 arithmetic_regex_pattern = r'^[ \(\)\+\-\*\\\.\%0-9]+$'
@@ -614,6 +615,12 @@ def main(source_files):
             typs[m] = 'int'
             typ[m] = 'ops_arg_idx'
 
+        # filter user defined types
+        if (cg.jsonConfig and cg.typeDefitionList != None):
+          for i in range(len(typs)):
+            typeName = cg.typeDefitionList.get(typs[i])
+            if typeName != None:
+              typs[i] = typeName
 
         #
         # check for repeats
@@ -867,6 +874,11 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         main(source_files=sys.argv[1:]) # [1:] ignores the ops.py file itself.
     # Print usage message if no arguments given
+    elif cg.jsonConfig:
+        if (cg.sourceFileList != None):
+            main(source_files=cg.sourceFileList)
+        else:
+            print("Please specify source files in OPSPYConfig.josn!\n")
     else:
         print(__doc__)
         sys.exit(1)
