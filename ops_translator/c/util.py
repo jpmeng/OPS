@@ -244,7 +244,11 @@ def parse_signature(text):
   text2 = re.sub(r'\bfloat\b','',text2)
   text2 = re.sub(r'\bdouble\b','',text2)
   text2 = re.sub(r'\bcomplexf\b','',text2)
-  text2 = re.sub(r'\bcomplexd\b','',text2)
+  text2 = re.sub(r'\bcomplexd\b', '', text2)
+  #filter the user defined types
+  if (config.jsonConfig and config.typeDefitionList != None):
+    for key in config.typeDefitionList.keys():
+      text2 = re.sub(r'\b'+key+r'\b', '', text2)
   text2 = text2.replace('*','')
   text2 = text2.replace('&','')
   text2 = text2.replace(')','')
