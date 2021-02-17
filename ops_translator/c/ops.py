@@ -378,7 +378,6 @@ def ops_par_loop_parse(text, macro_defs):
             temp_args.append(temp_gbl)
             num_args = num_args + 1
             m = arg_string.find(search5, m + 15)
-
       temp = {'loc': i,
             'name1': arg_string.split(',')[0].strip(),
             'name2': arg_string.split(',')[1].strip(),
@@ -388,6 +387,9 @@ def ops_par_loop_parse(text, macro_defs):
             'args': temp_args,
             'nargs': num_args}
       #print temp
+      if (cg.jsonConfig and cg.spaceDim != None):
+        temp['dim']=str(cg.spaceDim)
+
       loop_args.append(temp)
 
       i = text.find(search, i + 15)
@@ -853,13 +855,26 @@ def main(source_files):
   # finally, generate target-specific kernel files
   #
 
-
-  ops_gen_mpi_inline(str(source_files[0]), date, consts, kernels, soa_set)
-  ops_gen_mpi_lazy(str(source_files[0]), date, consts, kernels, soa_set)
-  ops_gen_mpi_cuda(str(source_files[0]), date, consts, kernels, soa_set)
-  ops_gen_mpi_hip(str(source_files[0]), date, consts, kernels, soa_set)
-  ops_gen_mpi_openacc(str(source_files[0]), date, consts, kernels, soa_set)
-  ops_gen_mpi_opencl(str(source_files[0]), date, consts, kernels, soa_set)
+  if (cg.jsonConfig):
+    if 'mpi_inline' in cg.backEnds:
+      ops_gen_mpi_inline(str(source_files[0]), date, consts, kernels, soa_set)
+    if 'mpi_lazy' in cg.backEnds:
+      ops_gen_mpi_lazy(str(source_files[0]), date, consts, kernels, soa_set)
+    if 'mpi_cuda' in cg.backEnds:
+      ops_gen_mpi_cuda(str(source_files[0]), date, consts, kernels, soa_set)
+    if 'mpi_hip' in cg.backEnds:
+      ops_gen_mpi_hip(str(source_files[0]), date, consts, kernels, soa_set)
+    if 'mpi_openacc' in cg.backEnds:
+      ops_gen_mpi_openacc(str(source_files[0]), date, consts, kernels, soa_set)
+    if 'mpi_opencl' in cg.backEnds:
+      ops_gen_mpi_opencl(str(source_files[0]), date, consts, kernels, soa_set)
+  else:
+    ops_gen_mpi_inline(str(source_files[0]), date, consts, kernels, soa_set)
+    ops_gen_mpi_lazy(str(source_files[0]), date, consts, kernels, soa_set)
+    ops_gen_mpi_cuda(str(source_files[0]), date, consts, kernels, soa_set)
+    ops_gen_mpi_hip(str(source_files[0]), date, consts, kernels, soa_set)
+    ops_gen_mpi_openacc(str(source_files[0]), date, consts, kernels, soa_set)
+    ops_gen_mpi_opencl(str(source_files[0]), date, consts, kernels, soa_set)
 
   import subprocess
   retcode = subprocess.call("which clang-format 2> /dev/null", shell=True)
