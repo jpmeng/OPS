@@ -191,7 +191,7 @@ def ops_gen_mpi_lazy(master, date, consts, kernels, soa_set):
     comm('user function')
 
     found = 0
-    kernelSourceFiles = os.path.join(src_dir,"*.h")
+    kernelSourceFiles = glob.glob( os.path.join(src_dir,"*.h"))
     if (config.jsonConfig and (config.kernelFileList != None)):
       kernelSourceFiles = config.kernelFileList
     for files in kernelSourceFiles:
