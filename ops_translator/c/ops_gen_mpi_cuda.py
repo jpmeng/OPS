@@ -202,7 +202,10 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
     comm('user function')
 
     found = 0
-    for files in glob.glob( os.path.join(src_dir, "*.h") ):
+    kernelSourceFiles =  glob.glob( os.path.join(src_dir,"*.h"))
+    if (config.jsonConfig and (config.kernelFileList != None)):
+      kernelSourceFiles = config.kernelFileList
+    for files in kernelSourceFiles:
       f = open( files, 'r' )
       for line in f:
         if name in line:
@@ -255,7 +258,8 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
     code('__global__ void ops_'+name+'(')
     for n in range (0, nargs):
       if arg_typ[n] == 'ops_arg_dat':
-        code(typs[n]+'* __restrict arg'+str(n)+',')
+        code(typs[n] + '* __restrict arg' + str(n) + ',')
+        code('int arg_dim'+str(n)+',')
       elif arg_typ[n] == 'ops_arg_gbl':
         if accs[n] == OPS_READ:
           if dims[n].isdigit() and int(dims[n])==1:
@@ -382,7 +386,7 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
             dim = dims[n]+', '
             extradim = 1
         elif not dims[n].isdigit():
-            dim = 'arg'+str(n)+'.dim, '
+            dim = 'arg_dim'+str(n)+','
             extradim = 1
         for i in range(1,NDIM):
           sizelist = sizelist + 'dims_'+name+'['+str(n)+']['+str(i-1)+'], '
@@ -395,7 +399,8 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
         if accs[n] == OPS_READ:
             pre = 'const '
 
-        code(pre+'ACC<'+typs[n]+'> argp'+str(n)+'('+dim+sizelist+'arg'+str(n)+');')
+        code(pre + 'ACC<' + typs[n] + '> argp' + str(n) + '(' + dim + sizelist + 'arg' + str(n) + ');')
+
     for n in range(0,nargs):
       if arg_typ[n] == 'ops_arg_dat':
           text = text +'argp'+str(n)
@@ -681,7 +686,7 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
     for n in range (0, nargs):
       if arg_typ[n] == 'ops_arg_gbl':
         if accs[n] == OPS_READ and (not dims[n].isdigit() or int(dims[n])>1):
-          code('consts_bytes += ROUND_UP('+str(dims[n])+'*sizeof('+typs[n]+'));')
+          code('consts_bytes += ROUND_UP(arg'+str(n)+'.dim*sizeof('+typs[n]+'));')
         elif accs[n] != OPS_READ:
           code('reduct_bytes += ROUND_UP(maxblocks*'+str(dims[n])+'*sizeof('+typs[n]+'));')
           code('reduct_size = MAX(reduct_size,sizeof('+typs[n]+')*'+str(dims[n])+');')
@@ -716,8 +721,8 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
           code('consts_bytes = 0;')
           code('arg'+str(n)+'.data = block->instance->OPS_consts_h + consts_bytes;')
           code('arg'+str(n)+'.data_d = block->instance->OPS_consts_d + consts_bytes;')
-          code('for (int d=0; d<'+str(dims[n])+'; d++) (('+typs[n]+' *)arg'+str(n)+'.data)[d] = arg'+str(n)+'h[d];')
-          code('consts_bytes += ROUND_UP('+str(dims[n])+'*sizeof(int));')
+          code('for (int d=0; d< arg'+str(n)+'.dim; d++) (('+typs[n]+' *)arg'+str(n)+'.data)[d] = arg'+str(n)+'h[d];')
+          code('consts_bytes += ROUND_UP(arg'+str(n)+'.dim*sizeof(int));')
     if GBL_READ == True and GBL_READ_MDIM == True:
       code('mvConstArraysToDevice(block->instance,consts_bytes);')
 
@@ -825,7 +830,8 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
       text = 'ops_'+name+'<<<grid, tblock >>> ( '
     for n in range (0, nargs):
       if arg_typ[n] == 'ops_arg_dat':
-        text = text +' ('+typs[n]+' *)p_a['+str(n)+'],'
+        text = text + ' (' + typs[n] + ' *)p_a[' + str(n) + '],'
+        text = text + ' arg'+str(n)+'.dim,'
       elif arg_typ[n] == 'ops_arg_gbl':
         if dims[n].isdigit() and int(dims[n])==1 and accs[n]==OPS_READ:
           text = text +' *('+typs[n]+' *)arg'+str(n)+'.data,'
@@ -964,10 +970,10 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
         code('desc->hash = ((desc->hash << 5) + desc->hash) + arg'+str(n)+'.dat->index;')
       if arg_typ[n] == 'ops_arg_gbl' and accs[n] == OPS_READ:
         if declared == 0:
-          code('char *tmp = (char*)ops_malloc('+dims[n]+'*sizeof('+typs[n]+'));')
+          code('char *tmp = (char*)ops_malloc(arg'+str(n)+'.dim*sizeof('+typs[n]+'));')
           declared = 1
         else:
-          code('tmp = (char*)ops_malloc('+dims[n]+'*sizeof('+typs[n]+'));')
+          code('tmp = (char*)ops_malloc(arg'+str(n)+'.dim*sizeof('+typs[n]+'));')
         code('memcpy(tmp, arg'+str(n)+'.data,'+dims[n]+'*sizeof('+typs[n]+'));')
         code('desc->args['+str(n)+'].data = tmp;')
     code('desc->function = ops_par_loop_'+name+'_execute;')
@@ -1015,9 +1021,12 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
   code('')
   code('#include <cuComplex.h>')  # Include the CUDA complex numbers library, in case complex numbers are used anywhere.
   code('')
+  code('#define OPS_FUN_PREFIX __device__ __host__')
   if os.path.exists(os.path.join(src_dir,'user_types.h')):
-    code('#define OPS_FUN_PREFIX __device__ __host__')
     code('#include "user_types.h"')
+  if (config.jsonConfig and config.headFileList != None):
+    for head in config.headFileList:
+       code('#include "'+ head + '"')
   code('#ifdef OPS_MPI')
   code('#include "ops_mpi_core.h"')
   code('#endif')
