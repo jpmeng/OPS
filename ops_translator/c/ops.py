@@ -736,7 +736,13 @@ def main(source_files):
         #print match.start()
         loc_kernel_headers.append(match.start());
         #loc_kernel_headers.append(match.end());
-
+      if (cg.jsonConfig and (cg.kernelFileList != None)):
+        kernelSourceFiles = cg.kernelFileList
+        for file in kernelSourceFiles:
+          pattern = re.compile("#include .*" + file)
+          iterator = pattern.finditer(text)
+          for match in iterator:
+            loc_kernel_headers.append(match.start());
 
       locs = sorted(loc_header + loc_consts + loc_loops + loc_kernel_headers)
 
