@@ -1024,9 +1024,6 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
   code('#define OPS_FUN_PREFIX __device__ __host__')
   if os.path.exists(os.path.join(src_dir,'user_types.h')):
     code('#include "user_types.h"')
-  if (config.jsonConfig and config.headFileList != None):
-    for head in config.headFileList:
-       code('#include "'+ head + '"')
   code('#ifdef OPS_MPI')
   code('#include "ops_mpi_core.h"')
   code('#endif')
@@ -1042,7 +1039,9 @@ def ops_gen_mpi_cuda(master, date, consts, kernels, soa_set):
       else:
         code('__constant__ '+consts[nc]['type']+' *'+(str(consts[nc]['name']).replace('"','')).strip()+';')
 
-
+  if (config.jsonConfig and config.headFileList != None):
+    for head in config.headFileList:
+       code('#include "'+ head + '"')
 
   code('')
   code('void ops_init_backend() {}')
