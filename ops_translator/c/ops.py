@@ -863,17 +863,17 @@ def main(source_files):
 
   if (cg.jsonConfig):
     if 'mpi_inline' in cg.backEnds:
-      ops_gen_mpi_inline(str(source_files[0]), date, consts, kernels, soa_set)
+      ops_gen_mpi_inline(str(cg.case), date, consts, kernels, soa_set)
     if 'mpi_lazy' in cg.backEnds:
-      ops_gen_mpi_lazy(str(source_files[0]), date, consts, kernels, soa_set)
+      ops_gen_mpi_lazy(str(cg.case), date, consts, kernels, soa_set)
     if 'mpi_cuda' in cg.backEnds:
-      ops_gen_mpi_cuda(str(source_files[0]), date, consts, kernels, soa_set)
+      ops_gen_mpi_cuda(str(cg.case), date, consts, kernels, soa_set)
     if 'mpi_hip' in cg.backEnds:
-      ops_gen_mpi_hip(str(source_files[0]), date, consts, kernels, soa_set)
+      ops_gen_mpi_hip(str(cg.case), date, consts, kernels, soa_set)
     if 'mpi_openacc' in cg.backEnds:
-      ops_gen_mpi_openacc(str(source_files[0]), date, consts, kernels, soa_set)
+      ops_gen_mpi_openacc(str(cg.case), date, consts, kernels, soa_set)
     if 'mpi_opencl' in cg.backEnds:
-      ops_gen_mpi_opencl(str(source_files[0]), date, consts, kernels, soa_set)
+      ops_gen_mpi_opencl(str(cg.case), date, consts, kernels, soa_set)
   else:
     ops_gen_mpi_inline(str(source_files[0]), date, consts, kernels, soa_set)
     ops_gen_mpi_lazy(str(source_files[0]), date, consts, kernels, soa_set)

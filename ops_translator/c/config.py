@@ -44,6 +44,7 @@ typeDefitionList = None
 headFileList = None
 spaceDim = None
 backEnds = None
+case = None
 
 file_text = ''
 depth = 0
@@ -51,7 +52,7 @@ depth = 0
 
 def ReadJsonConfiguration():
     global configuration, jsonConfig, kernelFileList, sourceFileList, \
-        typeDefitionList, headFileList,spaceDim,backEnds
+        typeDefitionList, headFileList,spaceDim,backEnds,case
     try:
         jsonFile = open("OPSPYConfig.json", "r")
         configuration = (json.load(jsonFile))
@@ -62,6 +63,7 @@ def ReadJsonConfiguration():
         headFileList = configuration.get('head')
         spaceDim = configuration.get('spacedim')
         backEnds = configuration.get('backend')
+        case = configuration.get('case')
     except IOError:
         jsonConfig = False
     except ValueError:
